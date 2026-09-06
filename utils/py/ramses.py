@@ -1746,6 +1746,16 @@ def rd_clump(nout,**kwargs):
     Args:
         nout: output file number
 
+        kwargs: optional arguments, including:
+            backup: whether to read from backup directory (default: False)
+            center: center of the region to read (default: None)
+            radius: radius of the region to read (default: None)
+            path: path to the output directory (default: "./")
+            silent: whether to suppress output (default: False)
+            fraction_threshold: fraction of mass in halo patch for determining central clump status 
+                                (default: None) meaning that the most dense clump is considered the central clump 
+                                in the halo patch.
+
     Returns:
         A RAMSES clump catalog with all clump properties
 
@@ -1838,19 +1848,9 @@ def rd_clump(nout,**kwargs):
     # tidal radius
     cat.rtidal = (cat.mpatch / (4 * np.pi * cat.dsad / 3))**(1/3)
 
-    # if a clump is larger than fraction_threshold of the mass of its halo patch, it is considered a central clump
-    if fraction_threshold is not None: 
-        order = np.argsort(cat.index) 
-        pos = np.searchsorted(cat.index, cat.halo, sorter=order)
-        root = order[pos] 
-
-        m_halo = cat.mpatch[root]
-        cat.is_central = cat.mpatch >= fraction_threshold * m_halo
-        cat.is_satellite = ~cat.is_central 
-        
     # most dense central clump in the halo 
     cat.is_most_dense = cat.index == cat.halo
-
+    
     # most massive clump in the halo
     cat.is_most_massive = np.zeros(cat.index.size, dtype=bool)
 
@@ -1859,6 +1859,19 @@ def rd_clump(nout,**kwargs):
     first[0] = True
     first[1:] = cat.halo[order][1:] != cat.halo[order][:-1]
     cat.is_most_massive[order[first]] = True
+
+    # if a clump is larger than fraction_threshold of the mass of its halo patch, it is considered a central clump
+    if fraction_threshold is not None: 
+        order = np.argsort(cat.index) 
+        pos = np.searchsorted(cat.index, cat.halo, sorter=order)
+        root = order[pos] 
+
+        m_halo = cat.mpatch[root]
+        cat.is_central = cat.mpatch >= fraction_threshold * m_halo
+    else: 
+        cat.is_central = cat.is_most_dense
+    
+    cat.is_satellite = ~cat.is_central
 
     # Filtering clumps
     if ( not (center is None)  and not (radius is None) ):
