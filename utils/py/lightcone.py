@@ -11,30 +11,30 @@ class LightconeReader:
     def rd_metadata(path, verbose=False):
         """
         Read the lightcone shell metadata from the .txt file
-        
+
         Returns:
             Dictionary with keys: 'npart', 'aexp_old', 'aexp'
         """
         if verbose:
             print(f"Reading metadata from {path}")
         with open(path, 'r') as file:
-            npart = int(file.readline().strip()) 
+            npart = int(file.readline().strip())
 
             # Read the scale factors
             aexp_old = float(file.readline().strip())
-            aexp = float(file.readline().strip()) 
-            aexp_center = (aexp + aexp_old)/2 
+            aexp = float(file.readline().strip())
+            aexp_center = (aexp + aexp_old)/2
 
             # Compute redshifts
-            z = 1/aexp - 1 
-            z_old = 1/aexp_old - 1 
+            z = 1/aexp - 1
+            z_old = 1/aexp_old - 1
             z_center = 1/aexp_center - 1
 
         if verbose:
             print(f"Found {npart} particles")
 
-        return {'npart': npart, 
-                'aexp_old': aexp_old, 'aexp': aexp, 'aexp_center': aexp_center, 
+        return {'npart': npart,
+                'aexp_old': aexp_old, 'aexp': aexp, 'aexp_center': aexp_center,
                 'z': z, 'z_old': z_old, 'z_center': z_center}
 
     @staticmethod
@@ -42,7 +42,7 @@ class LightconeReader:
         """
         Read the lightcone shell from the output directory.
         nproperties: number of non-idp properties per particle (default 7 for x,y,z,vx,vy,vz,mass)
-        
+
         Returns:
             idp: numpy array of particle IDs (int32) with shape (npart,)
             properties: numpy array of properties (float32) with shape (nproperties, npart)
@@ -53,19 +53,19 @@ class LightconeReader:
             print(f"Reading lightcone data from {path}")
         txt_path = path + ".txt"
         metadata = LightconeReader.rd_metadata(txt_path, verbose=verbose)
-        
+
         npart = metadata['npart']
-        
+
         # Read the raw data
         with open(path, 'rb') as f:
             # Read particle IDs first (8 bytes each)
             # idp_data = np.frombuffer(f.read(0 * npart), dtype=np.int32) # use this version when processing old output without idp
             idp_data = np.frombuffer(f.read(4 * npart), dtype=np.int32)
-            
+
             # Read the remaining properties (positions, velocities, masses) (4 bytes each)
             real_data = np.frombuffer(f.read(4 * nproperties * npart), dtype=np.float32)
             real_data = real_data.reshape(nproperties, npart)
-        
+
         return idp_data, real_data
 
     @staticmethod
@@ -99,7 +99,7 @@ class LightconeReader:
         """
         Read the lightcone shell from the output directory.
         nproperties: number of properties per cell (default 9 for x,y,z,rho,phi,accelx,accely,accelz,dphidt)
-        
+
         Returns:
             properties: numpy array of properties (float32) with shape (nproperties, ncell)
                        where rows are x, y, z, rho, phi, accelx, accely, accelz, dphidt (depending on nproperties)
@@ -109,16 +109,16 @@ class LightconeReader:
             print(f"Reading lightcone data from {path}")
         txt_path = path + ".txt"
         metadata = LightconeReader.rd_metadata(txt_path, verbose=verbose)
-        
+
         ncell = metadata['npart']
-        
+
         # Read the raw data
         with open(path, 'rb') as f:
 
             # Read the remaining properties (positions, velocities, masses) (4 bytes each)
             real_data = np.frombuffer(f.read(4 * nproperties * ncell), dtype=np.float32)
             real_data = real_data.reshape(nproperties, ncell)
-        
+
         return real_data
 
     @staticmethod
@@ -160,15 +160,15 @@ class LightconeReader:
         """
         Get all lightcone shell information from the lightcone directory.
         Looks for files named 'part_xxxxx' and 'tree_xxxxx' and returns shell information.
-        
+
         Args:
             path: Path to the lightcone directory
             verbose: Print debug information
-            
+
         Returns:
             List of dictionaries with shell information, sorted by nstep in descending order
             (largest nout corresponds to shell closest to observer)
-            
+
             Each dictionary contains:
             - 'nstep': shell number (int)
             - 'part_file': path to part binary file (str, or None if doesn't exist)
@@ -186,7 +186,7 @@ class LightconeReader:
             if verbose:
                 print(f"Path {path} does not exist")
             return []
-        
+
         # Define patterns for each file type
         patterns = {
             'part_file': re.compile(r'^part_(\d{5})$'),
@@ -196,29 +196,29 @@ class LightconeReader:
             'grav_file': re.compile(r'^grav_(\d{5})$'),
             'grav_metadata': re.compile(r'^grav_(\d{5})\.txt$')
         }
-        
+
         shells = {}  # Dictionary to collect shell information by nstep
-        
+
         try:
             # Loop over all files in the directory
             for filename in os.listdir(path):
                 filepath = os.path.join(path, filename)
                 if not os.path.isfile(filepath):
                     continue
-                
+
                 # Check each pattern
                 for file_type, pattern in patterns.items():
                     match = pattern.match(filename)
                     if match:
                         nstep = int(match.group(1))
-                        
+
                         # Initialize shell entry if needed
                         if nstep not in shells:
                             shells[nstep] = {'nstep': nstep}
-                        
+
                         # Store file path
                         shells[nstep][file_type] = filepath
-                        
+
                         # Store file size for binary files
                         if file_type in ['part_file', 'tree_file']:
                             try:
@@ -229,34 +229,34 @@ class LightconeReader:
                                 if verbose:
                                     print(f"Warning: Could not get size for {file_type} shell {nstep}")
                         break
-                        
+
         except OSError as e:
             if verbose:
                 print(f"Error reading directory {path}: {e}")
             return []
-        
+
         # Convert to list and sort by nstep in descending order
         shell_list = list(shells.values())
         shell_list.sort(key=lambda x: x['nstep'], reverse=True)
-        
+
         # Fill in None values for missing fields
         for shell in shell_list:
             for field in ['part_file', 'part_metadata', 'part_size', 'tree_file', 'tree_metadata', 'tree_size']:
                 if field not in shell:
                     shell[field] = None
-        
+
         # Print statistics only in verbose mode
         if verbose and shell_list:
             part_shells = [s for s in shell_list if s['part_file'] is not None]
             tree_shells = [s for s in shell_list if s['tree_file'] is not None]
             grav_shells = [s for s in shell_list if s['grav_file'] is not None]
-            
+
             print(f"Found {len(shell_list)} total shells ({len(part_shells)} part, {len(tree_shells)} tree)")
-            
+
             if part_shells:
                 total_part_size = sum(s['part_size'] for s in part_shells if s['part_size'] is not None)
                 print(f"Part files total size: {total_part_size/1024**3:.2f} GB")
-            
+
             if tree_shells:
                 total_tree_size = sum(s['tree_size'] for s in tree_shells if s['tree_size'] is not None)
                 print(f"Tree files total size: {total_tree_size/1024**3:.2f} GB")
@@ -269,7 +269,7 @@ class LightconeReader:
 
     @staticmethod
     def overdensity_hp_map(shell, nside, info, **kwargs):
-        """ 
+        """
         This function computes the overdensity map for a given shell using HEALPix.
 
         Parameters
@@ -352,7 +352,7 @@ class LightconeReader:
         nproc : int, optional
             The number of processes to use for parallel computation. Default is None,
             which uses the number of CPU cores available.
-        
+
         Returns
         -------
         kappa_map : ndarray
@@ -395,33 +395,33 @@ class LightconeReader:
 
         return kappa_map
 
-    @staticmethod 
+    @staticmethod
     def cone_hp_mask(nside, alpha_y, alpha_z):
         """
         Rectangular pencil-beam mask centered on the +x axis (lon=0, lat=0).
-        Note: nside = 1024 takes ~ 1 second, O(nside^2) scaling. We compute the 
-        corners of the cone by solving the conditions at equality for a unit sphere 
-        x^2 + y^2 + z^2 = 1 then 
-    
-        x / sqrt(x^2 + y^2) = cos(alpha_y) and x / sqrt(x^2 + z^2) = cos(alpha_z). 
-    
+        Note: nside = 1024 takes ~ 1 second, O(nside^2) scaling. We compute the
+        corners of the cone by solving the conditions at equality for a unit sphere
+        x^2 + y^2 + z^2 = 1 then
+
+        x / sqrt(x^2 + y^2) = cos(alpha_y) and x / sqrt(x^2 + z^2) = cos(alpha_z).
+
         This gives the corners needed for the healpix query_polygon function.
-    
+
         Parameters
         -------------
-        nside (int): 
+        nside (int):
             healpix nside parameter
-        alpha_y (float): 
+        alpha_y (float):
             half opening angle in longitude (x-y projection), degrees
-        alpha_z (float): 
+        alpha_z (float):
             half opening angle in latitude  (x-z projection), degrees
-            
-        Returns 
+
+        Returns
         ----------
-        mask (np.ndarray): 
+        mask (np.ndarray):
             healpix map with 1 inside the beam, 0 outside.
         """
-        
+
         ty, tz = np.tan(np.radians(alpha_y)), np.tan(np.radians(alpha_z))
         x = 1.0 / np.sqrt(1 + ty**2 + tz**2)
         corners = np.array([[x,  x*ty,  x*tz],
@@ -432,5 +432,3 @@ class LightconeReader:
         mask = np.zeros(hp.nside2npix(nside))
         mask[ipix] = 1.0
         return mask
-
-
