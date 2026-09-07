@@ -1869,7 +1869,7 @@ def rd_clump(nout,**kwargs):
         m_halo = cat.mpatch[root]
         cat.is_central = cat.mpatch >= fraction_threshold * m_halo
     else:
-        cat.is_central = cat.is_most_dense
+        cat.is_central = cat.index == cat.parent
 
     cat.is_satellite = ~cat.is_central
 
