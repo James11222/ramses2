@@ -251,7 +251,7 @@ contains
        & isp_swap, num_selected, &
        & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
        & box_ckey_min_d, box_ckey_max_d, periodic_d, &
-       & eta_SNII, yield_SNII, e_SN, M_SNII, z_ave, scale_nH, metal, imetal, gamma, &
+       & eta_SNII, yield_SNII, e_SN, E_SNII, m_SN, M_SNII, z_ave, scale_nH, metal, imetal, gamma, &
        & d_skip, dx_loc, vol_loc, ilevel, leading, msn_loc_d, smallr)
     implicit none
     type(oct), device :: grid(*)
@@ -272,7 +272,7 @@ contains
     integer(kind=4), device :: box_ckey_min_d(3,*)
     integer(kind=4), device :: box_ckey_max_d(3,*)
     logical, device :: periodic_d(3)
-    real(kind=8), intent(in), value :: eta_SNII, yield_SNII, e_SN, M_SNII, z_ave, scale_nH
+    real(kind=8), intent(in), value :: eta_SNII, yield_SNII, e_SN, E_SNII, m_SN, M_SNII, z_ave, scale_nH
     logical, intent(in), value :: metal
     integer(kind=4), intent(in), value :: imetal
     real(kind=8), intent(in), value :: gamma
@@ -501,7 +501,7 @@ contains
     ekloss = dloss * 0.5_dp * (up**2 + vp**2 + wp**2)
     zloss = yield_SNII + (1.0_dp - yield_SNII) * star_zp(ipart)
     dzloss = dloss * zloss
-    num_sn = mejecta / M_SNII
+    num_sn = mejecta / m_SN
 
     ! Central cell properties
     d = max(uold(icell, 1, igrid), real(smallr, kind=dp))
@@ -617,7 +617,7 @@ contains
     ! Compute critical mass ratio
     nH_nei = d_nei * scale_nH
     Zdepen = (max(0.01_dp, Z_nei / 0.02_dp))**(expZ_SN * 2.0_dp)
-    f_w_crit = (A_SN / 1.0e4_dp)**2.0_dp / (f_ESN * M_SNII) * num_sn**((expE_SN - 1.0_dp) * 2.0_dp) * nH_nei**(expN_SN * 2.0_dp) * Zdepen - 1.0_dp
+    f_w_crit = (A_SN / 1.0e4_dp)**2.0_dp / (f_ESN * M_SNII) * num_sn**((expE_SN - 1.0_dp) * 2.0_dp) * (E_SNII / 1.0e51_dp)**(2.0_dp * expE_SN - 1.0_dp) * nH_nei**(expN_SN * 2.0_dp) * Zdepen - 1.0_dp
     f_w_crit = max(0.0_dp, f_w_crit)
 
     ! Compute SN terminal velocity

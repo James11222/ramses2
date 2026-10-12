@@ -588,7 +588,7 @@ subroutine mechanical_feedback(s,p,ilevel,msn_loc)
         ! Compute critical mass ratio
         nH_nei = d_nei*scale_nH
         Zdepen = (max(0.01d0,Z_nei/0.02))**(expZ_SN*2d0)
-        f_w_crit = (A_SN/1d4)**2d0/(f_ESN*r%M_SNII)*num_sn**((expE_SN-1d0)*2d0)*nH_nei**(expN_SN*2d0)*Zdepen - 1d0
+        f_w_crit = (A_SN/1d4)**2d0/(f_ESN*r%M_SNII)*num_sn**((expE_SN-1d0)*2d0)*(r%E_SNII/1d51)**(2d0*expE_SN-1d0)*nH_nei**(expN_SN*2d0)*Zdepen - 1d0
         f_w_crit = max(0d0,f_w_crit) ! safety
 
         ! Compute SN terminal momentum

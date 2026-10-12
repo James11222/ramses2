@@ -1504,7 +1504,7 @@ contains
             & isp_swap, num_selected, &
             & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, sim%m%ngridmax, &
             & box_ckey_min, box_ckey_max, periodic, &
-            & sim%r%eta_SNII, sim%r%yield_SNII, e_SN, m_SN, sim%r%z_ave, scale_nH, &
+            & sim%r%eta_SNII, sim%r%yield_SNII, e_SN, sim%r%E_SNII, m_SN, sim%r%M_SNII, sim%r%z_ave, scale_nH, &
             & sim%r%metal, sim%r%imetal, sim%r%gamma, &
             & d_skip, &
             & dx, vol, ilevel, int(sim%r%nstarmax, 8), msn_loc_d, sim%r%smallr)
