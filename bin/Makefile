@@ -4,6 +4,7 @@
 # Compilation time parameters
 COMPILER = GNU
 CUDA_ARCH = sm_80
+NSUBGRID = 1
 NDIM = 3
 MPI = 0
 HYDRO = 1
@@ -71,6 +72,7 @@ BUILDDATE = $(shell date +"%D-%T")
 BUILDCOMMAND = ${MAKE} ${MAKEFLAGS}
 DEFINES += -DNDIM=$(NDIM) -DNVAR=$(NVAR)
 DEFINES += $(EXTRA_DEFINES)
+DEFINES += -DNSUBGRID=$(NSUBGRID)
 #############################################################################
 # RTZ options
 ifeq ($(DO_RTZ),1)
