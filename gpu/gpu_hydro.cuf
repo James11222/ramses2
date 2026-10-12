@@ -198,7 +198,6 @@ module hydro_device
   real(kind=dp), device :: switch_llf_dmin_d
   real(kind=dp), device :: switch_llf_pmin_d
 
-#include "hydro_launch.h"
 contains
 
   include 'gpu_reduce.cuf'
@@ -5961,8 +5960,15 @@ contains
 #ifndef PAPER
   ! NVHPC applies a kernel's launch_bounds to every kernel that follows it in the module,
   ! so kernels without launch_bounds are defined before every kernel that has them.
-#ifndef HYDRO_LB
+  ! Double precision is register-limited: cap the registers (threads per block set in gpu_runner.cuf).
+#if defined(MHD) || (defined(NPRE) && NPRE == 4)
 #define HYDRO_LB
+#elif !defined(NSUBGRID) || NSUBGRID == 1
+#define HYDRO_LB launch_bounds(64,16)
+#elif NSUBGRID == 2
+#define HYDRO_LB launch_bounds(256,4)
+#else
+#define HYDRO_LB launch_bounds(640,1)
 #endif
   attributes(global) HYDRO_LB subroutine hydro_integrator_kernel(grid, uold, unew, bold, bnew, &
        & f, father, nbor, &

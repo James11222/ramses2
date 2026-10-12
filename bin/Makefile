@@ -349,10 +349,6 @@ write_gitinfo.o: FORCE
 	$(FC) -O0 -cpp -DPATCH=\'"$(PATCH)"\' -DGITBRANCH=\'"$(GITBRANCH)"\' -DGITHASH=\'"$(GITHASH)"\' \
                 -DGITREPO=\'"$(GITREPO)"\' -DBUILDDATE=\'"$(BUILDDATE)"\' -DBUILDCOMMAND=\'"$(BUILDCOMMAND)"\' -c ../amr/write_gitinfo.f90 -o $@
 #############################################################################
-ifeq ($(COMPILER),NVHPC)
-gpu_hydro.o gpu_runner.o: $(wildcard $(GPU_PATH)/*_launch.h)
-endif
-#############################################################################
 cub_inclusive_scan_c.o: cub_inclusive_scan.h cub_inclusive_scan.cu
 	nvcc -arch=$(CUDA_ARCH) -O3 -lineinfo -c $(GPU_PATH)/cub_inclusive_scan.cu -o cub_inclusive_scan_c.o
 #############################################################################
