@@ -172,6 +172,7 @@ endif
 ifeq ($(COMPILER),NVHPC)
 adaptive_loop.o: gpu_manager.o
 amr_step.o: gpu_manager.o
+clump_merger.o: gpu_clump.o
 cooling_fine.o: gpu_cooling.o gpu_runner.o
 courant_fine.o: gpu_runner.o
 feedback.o: gpu_runner.o
