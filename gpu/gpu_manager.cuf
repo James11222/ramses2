@@ -81,9 +81,11 @@ recursive subroutine r_set_grid_device(pst)
         sink_jp     = pst%s%sink%jp
         sink_mp     = pst%s%sink%mp
         sink_tp     = pst%s%sink%tp
+        sink_tm     = pst%s%sink%tm
         sink_levelp = pst%s%sink%levelp
         sink_sortp  = pst%s%sink%sortp
-        if (allocated(sink_idp)) sink_idp = pst%s%sink%idp
+        sink_idp    = pst%s%sink%idp
+        sink_idm    = pst%s%sink%idm
         if (allocated(sink_pid) .and. allocated(pst%s%sink%pid)) sink_pid = pst%s%sink%pid
         call GPU_Error_Check(__FILE__, __LINE__)
         call nvtxEndRange()
@@ -204,9 +206,11 @@ subroutine gpu_to_host_part(pst)
      pst%s%sink%jp     = sink_jp
      pst%s%sink%mp     = sink_mp
      pst%s%sink%tp     = sink_tp
+     pst%s%sink%tm     = sink_tm
      pst%s%sink%levelp = sink_levelp
      pst%s%sink%sortp  = sink_sortp
-     if (allocated(sink_idp)) pst%s%sink%idp = sink_idp
+     pst%s%sink%idp    = sink_idp
+     pst%s%sink%idm    = sink_idm
      if (allocated(sink_pid) .and. allocated(pst%s%sink%pid)) pst%s%sink%pid = sink_pid
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
@@ -521,10 +525,12 @@ subroutine gpu_allocate_sink(sim)
   allocate(sink_jp(1:sim%r%nsinkmax, 1:ndim))
   allocate(sink_mp(1:sim%r%nsinkmax))
   allocate(sink_tp(1:sim%r%nsinkmax))
+  allocate(sink_tm(1:sim%r%nsinkmax))
   allocate(sink_sortp(1:sim%r%nsinkmax))
   allocate(sink_levelp(1:sim%r%nsinkmax))
   allocate(sink_pid(1:sim%r%nsinkmax))
-  if (sim%r%nlevelmax > sim%r%levelmin) allocate(sink_idp(1:sim%r%nsinkmax))
+  allocate(sink_idp(1:sim%r%nsinkmax))
+  allocate(sink_idm(1:sim%r%nsinkmax))
 #ifdef OUTPUT_PARTICLE_POTENTIAL
   allocate(sink_phip(1:sim%r%nsinkmax))
 #endif

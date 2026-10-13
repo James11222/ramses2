@@ -406,6 +406,9 @@ recursive subroutine r_deallocate_clump(pst)
   use mdl_module
   use ramses_commons, only: pst_t
   use mdl_parameters
+#ifdef _CUDA
+  use clump_device, only: gpu_reset_clump
+#endif
   implicit none
   type(pst_t)::pst
 
@@ -416,7 +419,11 @@ recursive subroutine r_deallocate_clump(pst)
      call r_deallocate_clump(pst%pLower)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#ifdef _CUDA
+     call gpu_reset_clump(pst%s)
+#else
      call deallocate_peak_patch_arrays(pst%s)
+#endif
   endif
 
 end subroutine r_deallocate_clump

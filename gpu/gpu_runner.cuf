@@ -66,6 +66,8 @@ module gpu_runner
   integer(kind=4), device, allocatable, dimension(:)   :: sink_sortp
   integer(i8b),    device, allocatable, dimension(:)   :: sink_idp
   integer(kind=4), device, allocatable, dimension(:)   :: sink_pid
+  real(kind=dp),   device, allocatable, dimension(:)   :: sink_tm
+  integer(i8b),    device, allocatable, dimension(:)   :: sink_idm
 
   !> xp_swap/isp_swap/idp_swap: gather/scatter scratch and other tasks.
   real(kind=dp),   device, allocatable, dimension(:) :: xp_swap
