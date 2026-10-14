@@ -1,0 +1,127 @@
+!> GPU sink particle evolution CUDA kernels (accretion, drag, AGN feedback).
+module sink_device
+  use amr_parameters, only: ndim, twotondim, dp, i8b
+  use hydro_parameters, only: nvar
+  use oct_commons, only: oct
+  use gpu_utils
+  use cudafor
+  use feedback_device, only: get_cell_by_key
+  implicit none
+
+  ! Krumholz et al. 2004 table of alpha = rho/rho_inf for x = r/r_Bondi in [0.01,2]
+  real(kind=dp), parameter, dimension(51) :: alphatable_const = (/ &
+       820.254_dp, 701.882_dp, 600.752_dp, 514.341_dp, 440.497_dp, 377.381_dp, 323.427_dp, &
+       277.295_dp, 237.845_dp, 204.1_dp, 175.23_dp, 150.524_dp, 129.377_dp, 111.27_dp, 95.7613_dp, &
+       82.4745_dp, 71.0869_dp, 61.3237_dp, 52.9498_dp, 45.7644_dp, 39.5963_dp, 34.2989_dp, &
+       29.7471_dp, 25.8338_dp, 22.4676_dp, 19.5705_dp, 17.0755_dp, 14.9254_dp, 13.0714_dp, &
+       11.4717_dp, 10.0903_dp, 8.89675_dp, 7.86467_dp, 6.97159_dp, 6.19825_dp, 5.52812_dp, &
+       4.94699_dp, 4.44279_dp, 4.00497_dp, 3.6246_dp, 3.29395_dp, 3.00637_dp, 2.75612_dp, &
+       2.53827_dp, 2.34854_dp, 2.18322_dp, 2.03912_dp, 1.91344_dp, 1.80378_dp, 1.70804_dp, &
+       1.62439_dp /)
+
+contains
+
+  include 'gpu_reduce.cuf'
+
+  !> B-spline cell key and weight of the j-th stencil cell (j=0..order**3-1)
+  !> for a sink at position x (in units of dx at level ilevel).
+  !> Mirrors sink_B_spline_weights_CIC/TSC/PCS, including periodic wrap.
+  attributes(device) subroutine sink_bspline_device(order, x, j, &
+       & box_ckey_min_d, box_ckey_max_d, periodic_d, ilevel, ckey, w)
+    implicit none
+    integer(kind=4), intent(in), value :: order
+    real(kind=dp), intent(in) :: x(3)
+    integer(kind=4), intent(in), value :: j
+    integer(kind=4), device :: box_ckey_min_d(3,*)
+    integer(kind=4), device :: box_ckey_max_d(3,*)
+    logical, device :: periodic_d(3)
+    integer(kind=4), intent(in), value :: ilevel
+    integer(kind=4), intent(out) :: ckey(3)
+    real(kind=dp), intent(out) :: w
+
+    integer :: idim, k, jj, ibase
+    real(kind=dp) :: dr, xc, wd
+
+    w = 1.0_dp
+    jj = j
+    do idim = 1, 3
+       k = mod(jj, order)
+       jj = jj / order
+       if (order == 2) then
+          ! CIC (dr: right cloud boundary)
+          dr = x(idim) + 0.5_dp
+          ibase = floor(dr) - 1
+          dr = dr - real(ibase + 1, kind=dp)
+          if (k == 0) then
+             wd = 1.0_dp - dr
+          else
+             wd = dr
+          endif
+       else if (order == 3) then
+          ! TSC
+          ibase = int(x(idim)) - 1
+          xc = real(ibase + k, kind=dp) + 0.5_dp
+          if (k == 1) then
+             wd = 0.75_dp - (x(idim) - xc)**2
+          else
+             wd = 0.5_dp * (1.5_dp - abs(x(idim) - xc))**2
+          endif
+       else
+          ! PCS
+          ibase = int(x(idim) + 1.5_dp) - 3
+          xc = real(ibase + k, kind=dp) + 0.5_dp
+          if (k == 0 .or. k == 3) then
+             wd = (2.0_dp - abs(x(idim) - xc))**3 / 6.0_dp
+          else
+             wd = (4.0_dp - 6.0_dp*(x(idim) - xc)**2 + 3.0_dp*abs(x(idim) - xc)**3) / 6.0_dp
+          endif
+       endif
+       w = w * wd
+       ckey(idim) = ibase + k
+       ! Periodic boundary conditions
+       if (periodic_d(idim)) then
+          if (ckey(idim) <  box_ckey_min_d(idim, ilevel + 1)) &
+               & ckey(idim) = ckey(idim) - box_ckey_min_d(idim, ilevel + 1) + box_ckey_max_d(idim, ilevel + 1)
+          if (ckey(idim) >= box_ckey_max_d(idim, ilevel + 1)) &
+               & ckey(idim) = ckey(idim) + box_ckey_min_d(idim, ilevel + 1) - box_ckey_max_d(idim, ilevel + 1)
+       endif
+    end do
+  end subroutine sink_bspline_device
+
+  !> alpha = rho/rho_inf for a critical Bondi solution at x = r/r_Bondi
+  !> (Krumholz et al. 2004), mirrors bondi_alpha in sink_evolution.f90
+  attributes(device) function bondi_alpha_device(x) result(alpha)
+    implicit none
+    real(kind=dp), intent(in), value :: x
+    real(kind=dp) :: alpha
+
+    real(kind=dp), parameter :: xmin = 0.01_dp, xmax = 2.0_dp
+    integer, parameter :: ntable = 51
+    real(kind=dp) :: lambda_c, xtable, xtablep1, alpha_exp
+    integer :: idx
+
+    lambda_c = exp(1.5_dp) / 4.0_dp
+    if (x <= xmin) then
+       alpha = lambda_c / sqrt(2.0_dp * x**3)
+    else if (x >= xmax) then
+       alpha = exp(1.0_dp / x)
+    else
+       idx = floor((ntable - 1) * log(x / xmin) / log(xmax / xmin))
+       xtable   = exp(log(xmin) + real(idx, kind=dp)     * log(xmax / xmin) / real(ntable - 1, kind=dp))
+       xtablep1 = exp(log(xmin) + real(idx + 1, kind=dp) * log(xmax / xmin) / real(ntable - 1, kind=dp))
+       alpha_exp = log(x / xtable) / log(xtablep1 / xtable)
+       alpha = alphatable_const(idx + 1) * (alphatable_const(idx + 2) / alphatable_const(idx + 1))**alpha_exp
+    endif
+  end function bondi_alpha_device
+
+  !> AGN feedback radial weight, mirrors psy_function (constant for now)
+  attributes(device) function psy_function_device(quasar_mode, r) result(psy)
+    implicit none
+    logical, intent(in), value :: quasar_mode
+    real(kind=dp), intent(in), value :: r
+    real(kind=dp) :: psy
+
+    psy = 1.0_dp
+  end function psy_function_device
+
+end module sink_device
