@@ -7,7 +7,7 @@ module sink_device
   use cudafor
   use feedback_device, only: get_cell_by_key
   use gpu_runner, only: grid, uold, unew, bold, rho, &
-       & sink_xp, sink_vp, sink_mp, sink_tp, sink_jp, flag1
+       & sink_xp, sink_vp, sink_mp, sink_tp, sink_jp
   implicit none
 
   ! Krumholz et al. 2004 table of alpha = rho/rho_inf for x = r/r_Bondi in [0.01,2]
@@ -195,67 +195,6 @@ contains
     psy = psy_function_device(quasar_mode, r_rel)
     d = max(uold(icell, 1, igrid), smallr)
   end subroutine agn_offset_device
-
-  !> Sink refinement: flag cells of level ilevel within nrad cells of every sink
-  !> at level ilevel and finer. One block per sink, threads over the (2*nrad+1)**3
-  !> lattice. Mirrors sink_flag in flag_utils.f90.
-  attributes(global) subroutine sink_flag_kernel( &
-       & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
-       & box_ckey_min_d, box_ckey_max_d, periodic_d, &
-       & head_idx, ilevel, nrad, skip1, skip2, skip3, dx_loc)
-    implicit none
-    integer(kind=8), device :: hash_key_d(*)
-    integer(kind=4), device :: hash_val_d(*)
-    integer(kind=4), intent(in), value :: hash_size_d
-    integer(kind=4), device :: ckey_max_d(*)
-    integer(kind=8), device :: key_off_d(*)
-    integer(kind=4), intent(in), value :: ngridmax
-    integer(kind=4), device :: box_ckey_min_d(3,*)
-    integer(kind=4), device :: box_ckey_max_d(3,*)
-    logical, device :: periodic_d(3)
-    integer(kind=4), intent(in), value :: head_idx, ilevel, nrad
-    real(kind=dp), intent(in), value :: skip1, skip2, skip3, dx_loc
-
-    integer :: ipart, n, nside, idim, igrid, icell
-    integer(kind=4) :: ckey(3)
-    real(kind=dp) :: xcen(3), xnei(3), x_rel(3), xmin, xmax
-
-    ipart = head_idx + blockIdx%x - 1
-    nside = 2 * nrad + 1
-
-    ! Sink sphere center in units of current level Cartesian coordinates
-    xcen(1) = (sink_xp(ipart, 1) + skip1) / dx_loc
-    xcen(2) = (sink_xp(ipart, 2) + skip2) / dx_loc
-    xcen(3) = (sink_xp(ipart, 3) + skip3) / dx_loc
-
-    ! Loop over sink sphere sampling points
-    do n = threadIdx%x - 1, nside**3 - 1, blockDim%x
-       x_rel(1) = real(mod(n, nside) - nrad, kind=dp)
-       x_rel(2) = real(mod(n / nside, nside) - nrad, kind=dp)
-       x_rel(3) = real(n / (nside * nside) - nrad, kind=dp)
-       if (x_rel(1)**2 + x_rel(2)**2 + x_rel(3)**2 > real(nrad * nrad, kind=dp)) cycle
-
-       ! Neighboring cell coordinates with periodic boundary conditions
-       do idim = 1, 3
-          xnei(idim) = xcen(idim) + x_rel(idim)
-          if (periodic_d(idim)) then
-             xmin = real(box_ckey_min_d(idim, ilevel + 1), kind=dp)
-             xmax = real(box_ckey_max_d(idim, ilevel + 1), kind=dp)
-             if (xnei(idim) <  xmin) xnei(idim) = xnei(idim) - xmin + xmax
-             if (xnei(idim) >= xmax) xnei(idim) = xnei(idim) + xmin - xmax
-          endif
-          ckey(idim) = int(xnei(idim))
-       end do
-
-       ! If missing, then cycle. This should never happen if sink_refine=.true.
-       call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
-            & ilevel, ckey, igrid, icell)
-       if (igrid <= 0 .or. igrid > ngridmax) cycle
-
-       ! Set refinement map flag1 to 1
-       flag1(icell, igrid) = 1
-    end do
-  end subroutine sink_flag_kernel
 
   !> Sink evolution: one block per sink of level ilevel. Mirrors the loop
   !> body of sink_evolution in sink_evolution.f90: [A] accretion (one thread
@@ -840,40 +779,5 @@ contains
 
     end associate
   end subroutine gpu_sink_evolution
-
-  ! =========================================================================
-  ! Host Driver: flag cells around sinks of level ilevel and finer for
-  ! refinement. Mirrors sink_flag in flag_utils.f90. The new flags are
-  ! counted afterwards by gpu_user_flag.
-  ! =========================================================================
-  subroutine gpu_sink_flag(sim, ilevel)
-    use nvtx
-    use ramses_commons, only: ramses_t
-    use gpu_runner, only: hash_key, hash_val, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic
-    implicit none
-    type(ramses_t) :: sim
-    integer, intent(in) :: ilevel
-
-    real(kind=8) :: dx_loc
-    integer :: head_idx, nsink
-
-    ! Sinks at level ilevel and finer
-    head_idx = sim%sink%headp(ilevel)
-    nsink = sim%sink%npart - head_idx + 1
-    if (nsink <= 0) return
-
-    ! Mesh spacing in that level
-    dx_loc = sim%r%boxlen/2**ilevel
-
-    call nvtxStartRange("GPU sink_flag", color=2)!yellow
-    call sink_flag_kernel<<<nsink, 128>>>( &
-         & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, sim%m%ngridmax, &
-         & box_ckey_min, box_ckey_max, periodic, &
-         & head_idx, ilevel, sim%r%sink_b_spline_order, &
-         & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
-         & real(dx_loc,kind=dp))
-    call GPU_Error_Check(__FILE__, __LINE__)
-    call nvtxEndRange()
-  end subroutine gpu_sink_flag
 
 end module sink_device

@@ -176,13 +176,13 @@ clump_merger.o: gpu_clump.o
 cooling_fine.o: gpu_cooling.o gpu_runner.o
 courant_fine.o: gpu_runner.o
 feedback.o: gpu_runner.o
-flag_utils.o: gpu_runner.o gpu_sink.o gpu_utils.o
+flag_utils.o: gpu_runner.o gpu_utils.o
 force_fine.o: gpu_runner.o
 godunov_fine.o: gpu_runner.o
 gpu_clump.o: amr_parameters.o constants.o gpu_part.o gpu_runner.o gpu_utils.o hydro_parameters.o oct_commons.o ramses_commons.o
 gpu_cooling.o: amr_parameters.o cooling_module.o hydro_parameters.o oct_commons.o
 gpu_feedback.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
-gpu_flag.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
+gpu_flag.o: amr_parameters.o gpu_feedback.o gpu_utils.o hydro_parameters.o oct_commons.o
 gpu_hilbert.o: amr_parameters.o hilbert.o
 gpu_hydro.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
 gpu_manager.o: amr_parameters.o gpu_part.o gpu_refine.o gpu_runner.o gpu_utils.o hydro_parameters.o mdl.o mdl_commons.o ramses_commons.o turb_commons.o

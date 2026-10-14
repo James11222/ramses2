@@ -2056,7 +2056,7 @@ contains
   subroutine gpu_user_flag(sim, ilevel, nflag)
     use nvtx
     use hydro_device, only: hydro_flag_kernel
-    use flag_device, only: count_flag1_kernel, poisson_flag_kernel, mass_flag_kernel
+    use flag_device, only: count_flag1_kernel, poisson_flag_kernel, mass_flag_kernel, sink_flag_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
@@ -2073,6 +2073,7 @@ contains
     real(kind=dp) :: m_refine, jeans_refine, mass_sph, dx, factG, d_thres
     integer(kind=8), device :: nflag_d
     integer(kind=8) :: nflag_h
+    integer :: nsink
 
     dx = sim%r%boxlen/2**ilevel
     factG = 1
@@ -2133,6 +2134,19 @@ contains
                & err_grad_b2, floor_b2, err_grad_A, floor_A, err_grad_B, floor_B, err_grad_C, floor_C, &
 #endif
                & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p)
+          call nvtxEndRange()
+       endif
+    endif
+
+    ! Refinement rules around sink particles (sinks at level ilevel and finer)
+    if (sim%r%sink .and. sim%r%sink_refine) then
+       nsink = sim%sink%npart - sim%sink%headp(ilevel) + 1
+       if (nsink > 0) then
+          call nvtxStartRange("GPU user_flag", color=2)!yellow
+          call sink_flag_kernel<<<nsink, 128>>>(flag1, sink_xp, int(sim%r%nsinkmax, 8), sim%sink%headp(ilevel), &
+               & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, sim%m%ngridmax, &
+               & box_ckey_min, box_ckey_max, periodic, ilevel, sim%r%sink_b_spline_order, &
+               & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), dx)
           call nvtxEndRange()
        endif
     endif
