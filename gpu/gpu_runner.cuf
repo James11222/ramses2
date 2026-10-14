@@ -3443,6 +3443,53 @@ contains
   end subroutine gpu_gradient_phi
 
   !> @brief
+  !> This routine computes the analytical gravitational acceleration.
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_force_analytic(sim, ilevel)
+    use nvtx
+    use mg_device
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+    !
+    integer(kind=4) :: head_idx
+    integer(kind=4) :: num_octs, num_blocks
+    integer :: threadsX_per_block, threadsY_per_block
+    real(kind=8) :: dx
+
+    ! Only the built-in analytical models of gravana run on the GPU
+    if (sim%r%gravity_type > 2) then
+       write(*,*) 'gpu_force_analytic: gravity_type > 2 is not supported on the GPU'
+       stop
+    end if
+
+    dx = sim%r%boxlen/2**ilevel
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    threadsX_per_block = 8
+    threadsY_per_block = 16
+    num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    if (num_octs > 0) then
+       call nvtxStartRange("GPU force_analytic", color=1)!blue
+       call force_analytic_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, f, &
+            & head_idx, num_octs, real(dx,kind=dp), &
+            & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
+            & sim%r%gravity_type, &
+            & real(sim%r%gravity_params(1),kind=dp), real(sim%r%gravity_params(2),kind=dp), &
+            & real(sim%r%gravity_params(3),kind=dp), real(sim%r%gravity_params(4),kind=dp), &
+            & real(sim%r%gravity_params(5),kind=dp), sim%r%gravity_type < 0)
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    end if
+
+  end subroutine gpu_force_analytic
+
+  !> @brief
   !> This routine computes the gravitational potential energy.
   !>
   !> @detail

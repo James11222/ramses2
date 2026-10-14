@@ -1233,6 +1233,83 @@ contains
   ! =========================================================================
 
   ! =========================================================================
+  !> Analytical gravity on the cells of level ilevel. Mirrors force_analytic in
+  !> force_fine.f90 with the built-in models of gravana in grav_ana.f90:
+  !> 1 = constant vector, 2 = softened point mass. f is set when add=.false.
+  !> (gravity_type>0) and incremented when add=.true. (gravity_type<0).
+  attributes(global) subroutine force_analytic_kernel(grid, f, head_idx, num_octs, &
+       & dx, skip1, skip2, skip3, gravity_type, gp1, gp2, gp3, gp4, gp5, add)
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_octs
+    real(kind=dp), intent(in), value :: dx, skip1, skip2, skip3
+    integer(kind=4), intent(in), value :: gravity_type
+    real(kind=dp), intent(in), value :: gp1, gp2, gp3, gp4, gp5
+    logical, intent(in), value :: add
+
+    integer :: cell_idx, oct_idx, block_idx, idim, nstride
+    real(kind=dp) :: xx(3), ff(3), skip(3), xmass(3), rx(3), rr
+
+    block_idx = blockIdx%x - 1
+
+    ! Compute the oct idx
+    oct_idx = block_idx * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute the cell idx
+    cell_idx = threadIdx%x
+
+    ! Cell centre position in [0,box_size] (user units)
+    skip(1) = skip1; skip(2) = skip2; skip(3) = skip3
+    xx = 0.0_dp
+    do idim = 1, ndim
+       nstride = 2**(idim-1)
+       xx(idim) = (real(2 * grid(oct_idx)%ckey(idim) + mod((cell_idx-1)/nstride, 2), kind=dp) &
+            & + 0.5_dp) * dx - skip(idim)
+    end do
+
+    ff = 0.0_dp
+
+    ! Constant vector
+    if (gravity_type == 1) then
+       ff(1) = gp1; ff(2) = gp2; ff(3) = gp3
+    end if
+
+    ! Point mass (gp1 = GM, gp2 = softening length, gp3:gp5 = position)
+    if (gravity_type == 2) then
+       xmass(1) = gp3; xmass(2) = gp4; xmass(3) = gp5
+       rx = 0.0_dp
+       do idim = 1, ndim
+          rx(idim) = xx(idim) - xmass(idim)
+       end do
+       rr = sqrt(rx(1)**2 + rx(2)**2 + rx(3)**2 + gp2**2)
+       do idim = 1, ndim
+#if NDIM==1
+          ff(idim) = -gp1 * rx(idim) / rr
+#endif
+#if NDIM==2
+          ff(idim) = -gp1 * rx(idim) / rr**2
+#endif
+#if NDIM==3
+          ff(idim) = -gp1 * rx(idim) / rr**3
+#endif
+       end do
+    end if
+
+    do idim = 1, ndim
+       if (add) then
+          f(cell_idx, idim, oct_idx) = f(cell_idx, idim, oct_idx) + ff(idim)
+       else
+          f(cell_idx, idim, oct_idx) = ff(idim)
+       end if
+    end do
+
+  end subroutine force_analytic_kernel
+  ! =========================================================================
+
+  ! =========================================================================
   attributes(global) subroutine update_nbor_array_mg(nbor, grid, hash_key, hash_val, hash_size, &
        & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, head_idx, num_subgrids)
     logical, device :: periodic(1:3)
