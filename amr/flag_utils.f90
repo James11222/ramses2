@@ -376,7 +376,6 @@ recursive subroutine r_user_flag(pst,ilevel,input_size,noct,output_size)
 
 #ifdef _CUDA
      if(pst%s%m%data_on_device)then
-        ! Refinement rules around sink particles (counted in gpu_user_flag)
         if(pst%s%r%sink.and.pst%s%r%sink_refine)call gpu_sink_flag(pst%s,ilevel)
         call gpu_user_flag(pst%s, ilevel, nflag)
      else
