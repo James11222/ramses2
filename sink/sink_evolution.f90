@@ -950,7 +950,7 @@ contains
 
     ! See also Beckmann+2018 for a similar approach.
     !==================================================================
-    real(kind=8)::mach,v_rel_mag,I,drag_accel,dv_drag
+    real(kind=8)::mach,mach_c,v_rel_mag,I,drag_accel,dv_drag
     real(kind=8),dimension(1:ndim)::v_rel,v_rel_direction
 
     if(.not.s%r%drag_sink)return
@@ -967,15 +967,20 @@ contains
     ! Calculate the relative velocity direction
     v_rel_direction(1:ndim) = v_rel(1:ndim) / v_rel_mag
 
-    ! Compute the drag force
-    if(mach.lt.0.01)then
-       I = mach/3.0d0
-    else if(abs(mach-1).lt.0.01)then
-       I = 0.5*(0.5d0*log((mach+0.01)**2 - 1.0d0 + tiny(0.0d0)) &
-            & + 4.0d0 +  0.5d0*log((1.0d0+mach-0.01)/(1.0d0-mach+0.01+tiny(0.0d0))) - mach+0.01)
+    ! Compute the drag force. Both regimes are singular at mach=1,
+    ! so the Mach number is clamped away from it.
+    if(mach.lt.1.0d0)then
+       ! Subsonic (Ostriker 1999); series at small mach avoids cancellation
+       mach_c = min(mach, 0.99d0)
+       if(mach_c.lt.0.01d0)then
+          I = mach_c**3/3.0d0
+       else
+          I = 0.5d0*log((1.0d0+mach_c)/(1.0d0-mach_c)) - mach_c
+       end if
     else
-       ! Value for log(Lambda) taken from Beckmann+2018
-       I = 0.5d0*log(mach**2 - 1.0d0 + tiny(0.0d0)) + 4.0d0
+       ! Supersonic, value for log(Lambda) taken from Beckmann+2018
+       mach_c = max(mach, 1.01d0)
+       I = 0.5d0*log(mach_c**2 - 1.0d0) + 4.0d0
     end if
 
     ! Drag acceleration: force F = 4 pi I (G M)^2 rho / v_rel^2 divided
@@ -983,7 +988,6 @@ contains
     drag_accel = I * 4.0d0*pi *factG**2 * p%mp(ipart) * rho_av_all / v_rel_mag**2
 
     ! Limit the kick so drag can at most cancel the relative velocity
-    ! (also tames the 1/v_rel divergence of the subsonic regime)
     dv_drag = min(drag_accel * s%g%dtnew(ilevel), v_rel_mag)
 
     ! Update the velocity of the sink towards the local gas velocity
