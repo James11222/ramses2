@@ -1,0 +1,86 @@
+Basic namelist to test the sink merger.
+Two sinks of unequal mass, half a finest cell apart and bound to each other,
+in a uniform gas at rest. They should merge at the very first call.
+To run, compile with:
+make HYDRO=1 GRAV=1 NDIM=3
+An initial conditions file is required: IC_sink/ic_sink, which should contain:
+-0.001,0,0,0,0.03,0,0,0,1,0.001,0
+0.001,0,0,0,-0.03,0,0,0,1,0.0005,0
+Sink 2 should merge into sink 1. After the merger, we expect:
+sink 1: m=1.5e-3, x=(0.4996667,0.5,0.5), v=(0,0.01,0)
+sink 2: m=0, idm=1, tm=time of the merger
+The total mass in sinks should stay at 1.5e-3.
+
+&RUN_PARAMS
+hydro=.true.
+poisson=.true.
+ncontrol=1
+nrestart=0
+nremap=10
+nsubcycle=10*2,
+verbose=.false.
+debug=.false.
+nsuperoct=0
+pic=.true.
+/
+
+&AMR_PARAMS
+levelmin=5
+levelmax=8
+ngridtot=3000000
+nexpand=10*2,
+boxlen=1
+/
+
+&INIT_PARAMS
+nregion=1
+region_type(1)='square'
+x_center=0.5
+y_center=0.5
+z_center=0.5
+length_x=1.0
+length_y=1.0
+length_z=1.0
+exp_region=10.0
+d_region=1.0
+u_region=0.0
+v_region=0.0
+w_region=0.0
+p_region=0.999999
+initfile='IC_sink'
+filetype='ascii'
+/
+
+&OUTPUT_PARAMS
+tend=0.01
+/
+
+&UNITS_PARAMS
+units_density = 9.701214037999999e-23
+units_time = 392998825700775.44
+units_length = 5.4137730359807626e+20
+/
+
+&HYDRO_PARAMS
+gamma=1.00001
+courant_factor=0.8
+scheme='muscl'
+slope_type=1
+riemann='hllc'
+/
+
+&SINK_PARAMS
+sink=.true.
+nsinkmax=10
+sink_form=.false.
+sink_merge=.true.
+verbose_sink=.true.
+/
+
+&SINK_ACCRETION_PARAMS
+accretion_type=0 !no accretion
+/
+
+&REFINE_PARAMS
+sink_refine=.true.
+/
