@@ -476,4 +476,91 @@ contains
     endif
   end subroutine sink_evolution_kernel
 
+  ! =========================================================================
+  ! Host Driver: sink accretion, friction, AGN feedback and periodic wrap
+  ! for all sinks of level ilevel. Mirrors sink_evolution in sink_evolution.f90.
+  ! =========================================================================
+  subroutine gpu_sink_evolution(sim, ilevel, macc_loc)
+    use nvtx
+    use constants, only: pi, twopi, factG_in_cgs, mH, sigma_T, c_cgs
+    use ramses_commons, only: ramses_t
+    use gpu_runner, only: hash_key, hash_val, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic
+    implicit none
+    type(ramses_t) :: sim
+    integer, intent(in) :: ilevel
+    real(kind=8), intent(out) :: macc_loc
+
+    real(kind=8) :: scale_nH, scale_T2, scale_l, scale_d, scale_t, scale_v
+    real(kind=8) :: factG, lambda_sonic, edd_fac, dx_loc, vol_loc
+    real(kind=dp), device :: macc_loc_d
+    integer :: head_idx, nsink_lev, nBHnei
+
+    associate(r=>sim%r, g=>sim%g, m=>sim%m, p=>sim%sink)
+
+    macc_loc = 0.0d0
+    head_idx = p%headp(ilevel)
+    nsink_lev = p%tailp(ilevel) - head_idx + 1
+    if (nsink_lev <= 0) return
+
+    if (g%myid == 1 .and. r%verbose) write(*,*) 'Entering gpu_sink_evolution...'
+
+    ! Conversion factor from user units to cgs units
+    call units(r, g, scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
+
+    ! Gravitational constant
+    factG = 1d0
+    if (r%cosmo) factG = 3d0/4d0/twopi*g%omega_m*g%aexp
+
+    ! Bondi sonic constant
+    if (r%use_bondi_lambda) then
+       if (abs(r%gamma - 1).le.0.01) then
+          lambda_sonic = 0.25d0*exp(1.5d0)
+       else if (abs(r%gamma - 5.0d0/3.0d0).le.0.01) then
+          lambda_sonic = 0.25d0
+       else
+          lambda_sonic = 0.5d0**((r%gamma + 1)/(2d0*(r%gamma - 1))) &
+               & * (0.25d0*(5d0-3d0*r%gamma))**(-(5d0-3d0*r%gamma)/(2d0*(r%gamma - 1)))
+       end if
+    else
+       lambda_sonic = 1.0d0
+    end if
+
+    ! Eddington rate per unit sink mass (code units)
+    edd_fac = 4.0d0 * pi * factG_in_cgs * mH / (0.1d0 * sigma_T * c_cgs) * scale_t
+
+    ! Mesh spacing in that level
+    dx_loc = r%boxlen/2**ilevel
+    vol_loc = dx_loc**ndim
+
+    ! Number of cells within the B-spline region
+    nBHnei = r%sink_b_spline_order**ndim
+
+    macc_loc_d = 0.0_dp
+
+    call nvtxStartRange("GPU Sink Evolution Kernel", color=5)!red
+    call sink_evolution_kernel<<<nsink_lev, 256>>>( &
+         & hash_key, hash_val, m%hash_size, ckey_max, key_off, m%ngridmax, &
+         & box_ckey_min, box_ckey_max, periodic, &
+         & head_idx, ilevel, r%sink_b_spline_order, nBHnei, r%accretion_type, &
+         & real(m%skip(1),kind=dp), real(m%skip(2),kind=dp), real(m%skip(3),kind=dp), &
+         & real(dx_loc,kind=dp), real(vol_loc,kind=dp), real(g%dtnew(ilevel),kind=dp), real(g%t,kind=dp), &
+         & real(factG,kind=dp), real(lambda_sonic,kind=dp), real(edd_fac,kind=dp), &
+         & real(r%eddington_cap,kind=dp), real(r%eddington_floor,kind=dp), &
+         & real(r%t_start_black_hole,kind=dp), real(r%manual_accretion_rate,kind=dp), &
+         & real(r%sink_density_threshold,kind=dp), &
+         & real(r%gamma,kind=dp), real(r%smallr,kind=dp), real(r%smallc,kind=dp), &
+         & real(r%acc_sink_boost**(-2d0/3d0),kind=dp), &
+         & r%use_local_bondi_rate, r%bondi_use_vrel, r%bondi_use_gas_mass, r%use_rho_inf, &
+         & r%mass_weighting, r%momentum_conserving, r%fix_sink_mass, p%static, &
+         & real(r%box_size(1),kind=dp), real(r%box_size(2),kind=dp), real(r%box_size(3),kind=dp), &
+         & macc_loc_d)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    ! Copy back the total accreted mass from device to host
+    macc_loc = real(macc_loc_d, kind=8)
+
+    end associate
+  end subroutine gpu_sink_evolution
+
 end module sink_device

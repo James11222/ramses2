@@ -1,5 +1,8 @@
 module sink_evolution_module
   use rho_fine_module, only: cic_weight, cic_index, tsc_weight, tsc_index, pcs_weight, pcs_index
+#ifdef _CUDA
+  use sink_device, only: gpu_sink_evolution
+#endif
   type :: out_accretion_t
      real(kind=8)::mass
   end type out_accretion_t
@@ -27,7 +30,11 @@ contains
        call mdl_get_reply(pst%s%mdl,rID,output_size,next_output)
        output%mass=output%mass+next_output%mass
     else
+#ifdef _CUDA
+       call gpu_sink_evolution(pst%s,ilevel,output%mass)
+#else
        call sink_evolution(pst%s,pst%s%sink,ilevel,output%mass)
+#endif
     endif
 
   end subroutine r_sink_evolution
