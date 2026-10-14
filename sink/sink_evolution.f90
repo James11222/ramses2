@@ -465,7 +465,7 @@ contains
           v_rel(1:ndim) = vel_gas(1:ndim) - p%vp(ipart,1:ndim)
           if(r%bondi_use_vrel)then
              velocity   = norm2(v_rel(:))
-             v_bondi    = sqrt(velocity + cs_gas**2)
+             v_bondi    = sqrt(velocity**2 + cs_gas**2)
           else
              v_bondi    = cs_gas
           end if
@@ -790,7 +790,14 @@ contains
                    ! Collect all of the necessary positions and cartesian keys
                    do idim=1,ndim
                       xBH_fb_nei(idim,iBHnei) = x_rel(idim) + xcen(idim)
-                      ckey_fb_nei(idim,iBHnei) = int(xBH_fb_nei(idim,iBHnei))
+                      ckey_fb_nei(idim,iBHnei) = floor(xBH_fb_nei(idim,iBHnei))
+                      ! Periodic boundary conditions
+                      if(r%periodic(idim))then
+                         if(ckey_fb_nei(idim,iBHnei)< m%box_ckey_min(idim,ilevel+1)) &
+                              & ckey_fb_nei(idim,iBHnei)=ckey_fb_nei(idim,iBHnei)-m%box_ckey_min(idim,ilevel+1)+m%box_ckey_max(idim,ilevel+1)
+                         if(ckey_fb_nei(idim,iBHnei)>=m%box_ckey_max(idim,ilevel+1)) &
+                              & ckey_fb_nei(idim,iBHnei)=ckey_fb_nei(idim,iBHnei)+m%box_ckey_min(idim,ilevel+1)-m%box_ckey_max(idim,ilevel+1)
+                      endif
                    end do
 
                    ! Compute the weight of the cell in question
@@ -809,9 +816,10 @@ contains
                       hash_nbor(1:ndim)  = ckey_fb_nei(1:ndim,iBHnei)
                       call get_parent_cell(s,hash_nbor,igridn,icelln,flush_cache=.true.,fetch_cache=.true.)
 
-                      ! If missing cycle (missing cells must not
+                      ! If missing or refined cycle (these cells must not
                       ! contribute to the weight normalization)
                       if(igridn==0)cycle
+                      if(m%grid(igridn)%refined(icelln))cycle
 
                       call psy_function(quasar_mode,r_rel,local_weight)
                       weight_fb_nei(iBHnei) = local_weight
@@ -1137,7 +1145,7 @@ contains
     ! CIC at level ilevel (dr: right cloud boundary; dl: left cloud boundary)
     do idim=1,ndim
        dr(idim)=x(idim)+0.5D0
-       ir(idim)=int(dr(idim))
+       ir(idim)=floor(dr(idim))
        dr(idim)=dr(idim)-ir(idim)
        dl(idim)=1.0D0-dr(idim)
        il(idim)=ir(idim)-1
@@ -1159,8 +1167,10 @@ contains
     ! Periodic boundary conditions
     do idim=1,ndim
        if(r%periodic(idim))then
-          if(il(idim)< m%box_ckey_min(idim,ilevel+1))il(idim)=m%box_ckey_max(idim,ilevel+1)-1
-          if(ir(idim)>=m%box_ckey_max(idim,ilevel+1))ir(idim)=m%box_ckey_min(idim,ilevel+1)
+          if(il(idim)< m%box_ckey_min(idim,ilevel+1))il(idim)=il(idim)-m%box_ckey_min(idim,ilevel+1)+m%box_ckey_max(idim,ilevel+1)
+          if(ir(idim)< m%box_ckey_min(idim,ilevel+1))ir(idim)=ir(idim)-m%box_ckey_min(idim,ilevel+1)+m%box_ckey_max(idim,ilevel+1)
+          if(il(idim)>=m%box_ckey_max(idim,ilevel+1))il(idim)=il(idim)+m%box_ckey_min(idim,ilevel+1)-m%box_ckey_max(idim,ilevel+1)
+          if(ir(idim)>=m%box_ckey_max(idim,ilevel+1))ir(idim)=ir(idim)+m%box_ckey_min(idim,ilevel+1)-m%box_ckey_max(idim,ilevel+1)
        endif
     enddo
 
