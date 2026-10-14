@@ -72,7 +72,6 @@ BUILDDATE = $(shell date +"%D-%T")
 BUILDCOMMAND = ${MAKE} ${MAKEFLAGS}
 DEFINES += -DNDIM=$(NDIM) -DNVAR=$(NVAR)
 DEFINES += $(EXTRA_DEFINES)
-DEFINES += -DNSUBGRID=$(NSUBGRID)
 #############################################################################
 # RTZ options
 ifeq ($(DO_RTZ),1)
@@ -122,6 +121,9 @@ ifneq ($(NVECTOR),32)
 endif
 ifneq ($(NPRE),8)
    DEFINES += -DNPRE=$(NPRE)
+endif
+ifneq ($(NSUBGRID),1)
+   DEFINES += -DNSUBGRID=$(NSUBGRID)
 endif
 ifneq ($(NHILBERT),1)
    DEFINES += -DNHILBERT=$(NHILBERT)
