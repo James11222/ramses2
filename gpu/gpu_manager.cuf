@@ -301,7 +301,8 @@ subroutine gpu_allocate_amr(sim)
 #endif
 
   allocate(grid(1:sim%m%ngridmax+sim%m%ncachemax))
-  if(sim%r%nlevelmax > sim%r%levelmin .or. sim%r%clump_finder .or. sim%r%sink_form)then
+  if(sim%r%nlevelmax > sim%r%levelmin .or. sim%r%clump_finder .or. sim%r%sink_form .or. &
+       & sim%r%sink_merge)then
      allocate(flag1(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
      allocate(flag2(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
      flag1=0

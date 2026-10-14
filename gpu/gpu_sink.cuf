@@ -7,7 +7,7 @@ module sink_device
   use cudafor
   use feedback_device, only: get_cell_by_key
   use gpu_runner, only: grid, uold, unew, bold, rho, &
-       & sink_xp, sink_vp, sink_mp, sink_tp, sink_jp
+       & sink_xp, sink_vp, sink_mp, sink_tp, sink_jp, sink_idp, sink_tm, sink_idm
   implicit none
 
   ! Krumholz et al. 2004 table of alpha = rho/rho_inf for x = r/r_Bondi in [0.01,2]
@@ -20,6 +20,13 @@ module sink_device
        4.94699_dp, 4.44279_dp, 4.00497_dp, 3.6246_dp, 3.29395_dp, 3.00637_dp, 2.75612_dp, &
        2.53827_dp, 2.34854_dp, 2.18322_dp, 2.03912_dp, 1.91344_dp, 1.80378_dp, 1.70804_dp, &
        1.62439_dp /)
+
+  ! Collision pair buffers for the sink merger (mirrors ncollision_max in
+  ! sink_merger_module). Pairs beyond ncollision_max are dropped on the GPU.
+  integer, parameter :: ncollision_max = 1000
+  integer(kind=4), device :: npair_d
+  integer(kind=4), device, dimension(1:ncollision_max) :: pair_id1_d, pair_id2_d
+  integer(kind=4), device, dimension(1:ncollision_max) :: pair_idx1_d, pair_idx2_d
 
 contains
 
@@ -703,6 +710,290 @@ contains
   end subroutine sink_evolution_kernel
 
   ! =========================================================================
+  !> Sink merger: set flag1 to huge(1) in the octs of level ilevel.
+  !> Mirrors the flag1 reset of sink_id_deposition in sink_merger.f90.
+  attributes(global) subroutine reset_sink_id_kernel(flag1, head_idx, num_octs)
+    implicit none
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_octs
+
+    integer :: cell_idx, oct_idx, block_idx
+
+    block_idx = blockIdx%x - 1
+
+    ! Compute the oct idx
+    oct_idx = block_idx * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute the cell idx
+    cell_idx = threadIdx%x
+
+    flag1(cell_idx, oct_idx) = huge(1)
+
+  end subroutine reset_sink_id_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Sink merger: deposit the sink id into the TSC cells of every sink of
+  !> level ilevel, keeping the minimum id per cell. One thread per sink.
+  !> Mirrors sink_id_deposition in sink_merger.f90.
+  attributes(global) subroutine sink_id_deposit_kernel(flag1, &
+       & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+       & box_ckey_min_d, box_ckey_max_d, periodic_d, &
+       & head_idx, nsink_lev, ilevel, skip1, skip2, skip3, dx_loc)
+    implicit none
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    integer(kind=8), device :: hash_key_d(*)
+    integer(kind=4), device :: hash_val_d(*)
+    integer(kind=4), intent(in), value :: hash_size_d
+    integer(kind=4), device :: ckey_max_d(*)
+    integer(kind=8), device :: key_off_d(*)
+    integer(kind=4), intent(in), value :: ngridmax
+    integer(kind=4), device :: box_ckey_min_d(3,*)
+    integer(kind=4), device :: box_ckey_max_d(3,*)
+    logical, device :: periodic_d(3)
+    integer(kind=4), intent(in), value :: head_idx, nsink_lev, ilevel
+    real(kind=dp), intent(in), value :: skip1, skip2, skip3, dx_loc
+
+    integer :: ipart, j, igrid, icell, info, new_id
+    integer(kind=4) :: ckey(3)
+    real(kind=dp) :: xcen(3), xnei(3), w
+
+    ! Reset the collision pair counter (read by collect_collisions_kernel)
+    if (blockIdx%x == 1 .and. threadIdx%x == 1) npair_d = 0
+
+    ipart = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+    if (ipart > nsink_lev) return
+    ipart = head_idx + ipart - 1
+
+    ! Skip zero-mass sinks
+    if (sink_mp(ipart) <= 0.0_dp) return
+
+    xcen(1) = (sink_xp(ipart, 1) + skip1) / dx_loc
+    xcen(2) = (sink_xp(ipart, 2) + skip2) / dx_loc
+    xcen(3) = (sink_xp(ipart, 3) + skip3) / dx_loc
+
+    ! flag1 is 32-bit: the host checks that sink ids fit
+    new_id = int(sink_idp(ipart), kind=4)
+
+    do j = 0, 26
+       call sink_bspline_device(3, xcen, j, box_ckey_min_d, box_ckey_max_d, periodic_d, &
+            & ilevel, ckey, xnei, w)
+       if (w <= 0.0_dp) cycle
+       call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+            & ilevel, ckey, igrid, icell)
+       if (igrid <= 0 .or. igrid > ngridmax) cycle
+       info = atomicmin(flag1(icell, igrid), new_id)
+    end do
+  end subroutine sink_id_deposit_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Sink merger: for every sink of level ilevel, find the minimum sink id
+  !> deposited in its TSC cells. If it is smaller than its own id, append the
+  !> pair (id1,id2) to the collision list. One thread per sink.
+  !> Mirrors collect_collisions in sink_merger.f90.
+  attributes(global) subroutine collect_collisions_kernel(flag1, &
+       & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+       & box_ckey_min_d, box_ckey_max_d, periodic_d, &
+       & head_idx, nsink_lev, ilevel, skip1, skip2, skip3, dx_loc)
+    implicit none
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    integer(kind=8), device :: hash_key_d(*)
+    integer(kind=4), device :: hash_val_d(*)
+    integer(kind=4), intent(in), value :: hash_size_d
+    integer(kind=4), device :: ckey_max_d(*)
+    integer(kind=8), device :: key_off_d(*)
+    integer(kind=4), intent(in), value :: ngridmax
+    integer(kind=4), device :: box_ckey_min_d(3,*)
+    integer(kind=4), device :: box_ckey_max_d(3,*)
+    logical, device :: periodic_d(3)
+    integer(kind=4), intent(in), value :: head_idx, nsink_lev, ilevel
+    real(kind=dp), intent(in), value :: skip1, skip2, skip3, dx_loc
+
+    integer :: ipart, j, igrid, icell, k
+    integer :: my_id, neighbor_id, neighbor_id_min
+    integer(kind=4) :: ckey(3)
+    real(kind=dp) :: xcen(3), xnei(3), w
+
+    ipart = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+    if (ipart > nsink_lev) return
+    ipart = head_idx + ipart - 1
+
+    ! Skip zero-mass sinks
+    if (sink_mp(ipart) <= 0.0_dp) return
+
+    my_id = int(sink_idp(ipart), kind=4)
+
+    xcen(1) = (sink_xp(ipart, 1) + skip1) / dx_loc
+    xcen(2) = (sink_xp(ipart, 2) + skip2) / dx_loc
+    xcen(3) = (sink_xp(ipart, 3) + skip3) / dx_loc
+
+    neighbor_id_min = huge(1)
+    do j = 0, 26
+       call sink_bspline_device(3, xcen, j, box_ckey_min_d, box_ckey_max_d, periodic_d, &
+            & ilevel, ckey, xnei, w)
+       if (w <= 0.0_dp) cycle
+       call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+            & ilevel, ckey, igrid, icell)
+       if (igrid <= 0 .or. igrid > ngridmax) cycle
+       neighbor_id = flag1(icell, igrid)
+       if (neighbor_id < my_id .and. neighbor_id < neighbor_id_min) neighbor_id_min = neighbor_id
+    end do
+
+    ! Append the pair (pairs beyond ncollision_max are dropped)
+    if (neighbor_id_min < my_id) then
+       k = atomicadd(npair_d, 1) + 1
+       if (k <= ncollision_max) then
+          pair_id1_d(k) = neighbor_id_min
+          pair_id2_d(k) = my_id
+       endif
+    endif
+  end subroutine collect_collisions_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Sink merger: deduplicate, filter, break chains and execute the mergers of
+  !> the collision list. One block: thread 0 runs the sequential pair logic,
+  !> all threads look up the sink index of the pairs. Mirrors steps 4-8 of
+  !> sink_merger in sink_merger.f90. No printout and no abort on the GPU:
+  !> pairs beyond ncollision_max are dropped, these sinks still overlap and
+  !> are merged at the next call.
+  attributes(global) subroutine merge_sinks_kernel(npart, dx_loc, factG, texp, &
+       & periodic_d, bs1, bs2, bs3)
+    implicit none
+    integer(kind=4), intent(in), value :: npart
+    real(kind=dp), intent(in), value :: dx_loc, factG, texp
+    logical, device :: periodic_d(3)
+    real(kind=dp), intent(in), value :: bs1, bs2, bs3
+
+    integer, shared :: s_n
+    integer :: i, k, n, ipart, idim, j1, j2, tmp1, tmp2
+    logical :: swapped
+    real(kind=dp) :: m1, m2, total_mass, separation, vel_squared, binding_criteria
+    real(kind=dp) :: bs(3), dpos(3), rel(3), com_position(3), com_velocity(3)
+
+    bs(1) = bs1; bs(2) = bs2; bs(3) = bs3
+
+    ! Step 4: Deduplicate collision list (sort by id1 then id2, keep first id1)
+    if (threadIdx%x == 1) then
+       n = min(npair_d, ncollision_max)
+       do i = n, 1, -1
+          swapped = .false.
+          do k = 1, i - 1
+             if (pair_id1_d(k) > pair_id1_d(k+1) .or. &
+                  & (pair_id1_d(k) == pair_id1_d(k+1) .and. pair_id2_d(k) > pair_id2_d(k+1))) then
+                tmp1 = pair_id1_d(k); tmp2 = pair_id2_d(k)
+                pair_id1_d(k) = pair_id1_d(k+1); pair_id2_d(k) = pair_id2_d(k+1)
+                pair_id1_d(k+1) = tmp1; pair_id2_d(k+1) = tmp2
+                swapped = .true.
+             endif
+          end do
+          if (.not. swapped) exit
+       end do
+       k = 0
+       do i = 1, n
+          if (i > 1) then
+             if (pair_id1_d(i) == pair_id1_d(i-1)) cycle
+          endif
+          k = k + 1
+          pair_id1_d(k) = pair_id1_d(i)
+          pair_id2_d(k) = pair_id2_d(i)
+          pair_idx1_d(k) = 0
+          pair_idx2_d(k) = 0
+       end do
+       s_n = k
+    endif
+    call syncthreads()
+    if (s_n == 0) return
+
+    ! Step 5: Find the sink index of both sinks of every pair (all levels)
+    do ipart = threadIdx%x, npart, blockDim%x
+       do i = 1, s_n
+          if (pair_id1_d(i) == sink_idp(ipart)) pair_idx1_d(i) = ipart
+          if (pair_id2_d(i) == sink_idp(ipart)) pair_idx2_d(i) = ipart
+       end do
+    end do
+    call syncthreads()
+    if (threadIdx%x /= 1) return
+
+    ! Step 6: Filter collisions based on adopted merging criteria
+    do i = 1, s_n
+       j1 = pair_idx1_d(i); j2 = pair_idx2_d(i)
+       if (j1 <= 0 .or. j2 <= 0) then
+          pair_id1_d(i) = 0; pair_id2_d(i) = 0; cycle
+       endif
+       if (sink_mp(j1) <= 0.0_dp .or. sink_mp(j2) <= 0.0_dp) then
+          pair_id1_d(i) = 0; pair_id2_d(i) = 0; cycle
+       endif
+       ! Use the minimum-image convention across periodic boundaries
+       do idim = 1, 3
+          dpos(idim) = sink_xp(j1, idim) - sink_xp(j2, idim)
+          if (periodic_d(idim)) then
+             if (dpos(idim) >  0.5_dp*bs(idim)) dpos(idim) = dpos(idim) - bs(idim)
+             if (dpos(idim) < -0.5_dp*bs(idim)) dpos(idim) = dpos(idim) + bs(idim)
+          endif
+       end do
+       separation = sqrt(dpos(1)**2 + dpos(2)**2 + dpos(3)**2)
+       if (separation < dx_loc) then
+          vel_squared = (sink_vp(j1,1) - sink_vp(j2,1))**2 + (sink_vp(j1,2) - sink_vp(j2,2))**2 &
+               & + (sink_vp(j1,3) - sink_vp(j2,3))**2
+          binding_criteria = factG * (sink_mp(j1) + sink_mp(j2)) / dx_loc * (1.0_dp - (separation/dx_loc)**2)
+          if (vel_squared >= binding_criteria) then
+             pair_id1_d(i) = 0; pair_id2_d(i) = 0
+          endif
+       else
+          pair_id1_d(i) = 0; pair_id2_d(i) = 0
+       endif
+    end do
+
+    ! Step 7: Break merger chains (defer conflicting pairs to next call)
+    do i = 1, s_n
+       if (pair_id1_d(i) == 0) cycle
+       do k = 1, i - 1
+          if (pair_id1_d(k) /= 0 .and. pair_id2_d(k) == pair_id1_d(i)) then
+             pair_id1_d(i) = 0; pair_id2_d(i) = 0
+             exit
+          endif
+       end do
+    end do
+
+    ! Step 8: Execute mergers. Each sink is in at most one valid pair, so the
+    ! sink arrays can be updated in place.
+    do i = 1, s_n
+       if (pair_id1_d(i) == 0) cycle
+       j1 = pair_idx1_d(i); j2 = pair_idx2_d(i)
+       m1 = sink_mp(j1); m2 = sink_mp(j2)
+       total_mass = m1 + m2
+       ! Center of mass from the minimum-image offset of sink 2, wrapped back into the box
+       do idim = 1, 3
+          rel(idim) = sink_xp(j2, idim) - sink_xp(j1, idim)
+          if (periodic_d(idim)) then
+             if (rel(idim) >  0.5_dp*bs(idim)) rel(idim) = rel(idim) - bs(idim)
+             if (rel(idim) < -0.5_dp*bs(idim)) rel(idim) = rel(idim) + bs(idim)
+          endif
+          com_position(idim) = sink_xp(j1, idim) + m2 * rel(idim) / total_mass
+          if (periodic_d(idim)) then
+             if (com_position(idim) <  0.0_dp  ) com_position(idim) = com_position(idim) + bs(idim)
+             if (com_position(idim) >= bs(idim)) com_position(idim) = com_position(idim) - bs(idim)
+          endif
+          com_velocity(idim) = (m1 * sink_vp(j1, idim) + m2 * sink_vp(j2, idim)) / total_mass
+       end do
+       sink_mp(j1) = total_mass
+       sink_mp(j2) = 0.0_dp
+       do idim = 1, 3
+          sink_xp(j1, idim) = com_position(idim); sink_xp(j2, idim) = com_position(idim)
+          sink_vp(j1, idim) = com_velocity(idim); sink_vp(j2, idim) = com_velocity(idim)
+       end do
+       sink_tm(j2) = texp
+       sink_idm(j2) = pair_id1_d(i)
+    end do
+  end subroutine merge_sinks_kernel
+  ! =========================================================================
+
+  ! =========================================================================
   ! Host Driver: sink accretion, friction, AGN feedback and periodic wrap
   ! for all sinks of level ilevel. Mirrors sink_evolution in sink_evolution.f90.
   ! =========================================================================
@@ -801,5 +1092,93 @@ contains
 
     end associate
   end subroutine gpu_sink_evolution
+
+  ! =========================================================================
+  ! Host Driver: sink merger for all sinks of level ilevel. Mirrors
+  ! sink_merger in sink_merger.f90. Nothing is copied back to the host:
+  ! no printout and no abort on the GPU.
+  ! =========================================================================
+  subroutine gpu_sink_merger(sim, ilevel)
+    use nvtx
+    use constants, only: twopi
+    use ramses_commons, only: ramses_t
+    use gpu_runner, only: flag1, hash_key, hash_val, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic
+    implicit none
+    type(ramses_t) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs, nsink_lev
+    integer :: threadsX_per_block, threadsY_per_block, num_threads, num_blocks
+    real(kind=8) :: dx_loc, factG
+
+    associate(r=>sim%r, g=>sim%g, m=>sim%m, p=>sim%sink)
+
+    nsink_lev = p%tailp(ilevel) - p%headp(ilevel) + 1
+    if (nsink_lev <= 0) return
+
+    if (g%myid == 1 .and. r%verbose) write(*,*) 'Entering gpu_sink_merger...'
+
+    ! flag1 is 32-bit: make sure all sink ids fit
+    if (p%npart_tot > int(huge(1), kind=8)) then
+       write(*,*) 'gpu_sink_merger: sink id exceeds 32-bit range'
+       stop
+    endif
+
+    ! Mesh spacing in that level
+    dx_loc = r%boxlen/2**ilevel
+
+    ! Gravitational constant
+    factG = 1d0
+    if (r%cosmo) factG = 3d0/4d0/twopi*g%omega_m*g%aexp
+
+    ! Step 1a: Set flag1 to max possible index
+    head_idx = m%head(ilevel)
+    num_octs = m%noct(ilevel)
+    threadsX_per_block = 8
+    threadsY_per_block = 16
+    num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    if (num_octs > 0) then
+       call nvtxStartRange("GPU Sink ID Reset", color=5)!red
+       call reset_sink_id_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    endif
+
+    head_idx = p%headp(ilevel)
+    num_threads = 128
+    num_blocks = (nsink_lev + num_threads - 1) / num_threads
+
+    ! Step 1b: Deposit sink IDs to grid (also resets the pair counter)
+    call nvtxStartRange("GPU Sink ID Deposit", color=5)!red
+    call sink_id_deposit_kernel<<<num_blocks, num_threads>>>(flag1, &
+         & hash_key, hash_val, m%hash_size, ckey_max, key_off, m%ngridmax, &
+         & box_ckey_min, box_ckey_max, periodic, &
+         & head_idx, nsink_lev, ilevel, &
+         & real(m%skip(1),kind=dp), real(m%skip(2),kind=dp), real(m%skip(3),kind=dp), &
+         & real(dx_loc,kind=dp))
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    ! Step 2: Collect local collisions
+    call nvtxStartRange("GPU Sink Collisions", color=5)!red
+    call collect_collisions_kernel<<<num_blocks, num_threads>>>(flag1, &
+         & hash_key, hash_val, m%hash_size, ckey_max, key_off, m%ngridmax, &
+         & box_ckey_min, box_ckey_max, periodic, &
+         & head_idx, nsink_lev, ilevel, &
+         & real(m%skip(1),kind=dp), real(m%skip(2),kind=dp), real(m%skip(3),kind=dp), &
+         & real(dx_loc,kind=dp))
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    ! Steps 4-8: Deduplicate, filter, break chains and execute mergers
+    call nvtxStartRange("GPU Sink Merge", color=5)!red
+    call merge_sinks_kernel<<<1, 256>>>(p%npart, real(dx_loc,kind=dp), real(factG,kind=dp), &
+         & real(g%texp,kind=dp), periodic, &
+         & real(r%box_size(1),kind=dp), real(r%box_size(2),kind=dp), real(r%box_size(3),kind=dp))
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    end associate
+  end subroutine gpu_sink_merger
 
 end module sink_device

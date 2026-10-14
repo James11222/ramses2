@@ -6,6 +6,9 @@ module sink_merger_module
   use marshal, only: pack_fetch_flag, unpack_fetch_flag
   use sink_evolution_module, only: sink_B_spline_weights_TSC
   use nbors_utils, only: get_parent_cell
+#ifdef _CUDA
+  use sink_device, only: gpu_sink_merger
+#endif
 
   integer, parameter :: ncollision_max = 1000
 
@@ -40,7 +43,11 @@ contains
        call r_sink_merger(pst%pLower,ilevel,input_size)
        call mdl_get_reply(pst%s%mdl,rID,0)
     else
+#ifdef _CUDA
+       call gpu_sink_merger(pst%s, ilevel)
+#else
        call sink_merger(pst,ilevel)
+#endif
     endif
 
   end subroutine r_sink_merger

@@ -210,6 +210,7 @@ refine_utils.o: gpu_runner.o
 rho_fine.o: gpu_part.o gpu_runner.o
 sink_evolution.o: gpu_sink.o
 sink_formation.o: gpu_clump.o
+sink_merger.o: gpu_sink.o
 smooth.o: gpu_runner.o
 star_formation.o: gpu_runner.o
 synchro_hydro_fine.o: gpu_runner.o
