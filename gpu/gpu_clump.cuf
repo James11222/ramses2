@@ -280,7 +280,9 @@ contains
     ! Mesh fields: halo id (flag1), peak id (flag2) and smoothed density
     m%flag1 = flag1
     m%flag2 = flag2
+#ifdef GRAV
     m%rho   = rho
+#endif
 
     ! Sink peak ids
     if (sim%r%sink .and. allocated(sim%sink%pid)) then
