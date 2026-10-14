@@ -140,7 +140,7 @@ contains
        & t_start_black_hole, manual_accretion_rate, sink_density_threshold, &
        & gamma, smallr, smallc, boost_fac, &
        & use_local_bondi_rate, bondi_use_vrel, bondi_use_gas_mass, use_rho_inf, &
-       & mass_weighting, momentum_conserving, fix_sink_mass, static, &
+       & mass_weighting, momentum_conserving, fix_sink_mass, static, drag_sink, &
        & bs1, bs2, bs3, macc_loc_d)
     implicit none
     integer(kind=8), device :: hash_key_d(*)
@@ -159,6 +159,7 @@ contains
     real(kind=dp), intent(in), value :: gamma, smallr, smallc, boost_fac
     logical, intent(in), value :: use_local_bondi_rate, bondi_use_vrel, bondi_use_gas_mass, use_rho_inf
     logical, intent(in), value :: mass_weighting, momentum_conserving, fix_sink_mass, static
+    logical, intent(in), value :: drag_sink
     real(kind=dp), intent(in), value :: bs1, bs2, bs3
     real(kind=dp), device :: macc_loc_d
 
@@ -181,6 +182,7 @@ contains
     real(kind=dp) :: div_right, div_left, v_bondi, bondi_mass, rb, rb_max, r_rel
     real(kind=dp) :: rho_inf, dMBH, dMED
     real(kind=dp) :: d_acc, m_acc, x_acc(3), p_acc(3), l_acc(3)
+    real(kind=dp) :: mach, mach_c, fI, v_rel_mag, drag_accel, dv_drag
 #ifdef MHD
     real(kind=dp) :: bx, by, bz
 #endif
@@ -458,6 +460,40 @@ contains
     endif ! accretion_type > 0
 
     !===========================================
+    ! [B] Dynamical friction (Ostriker 1999), mirrors dynamical_friction
+    !===========================================
+    if (drag_sink .and. j == 0) then
+       ! Velocity of the gas relative to the (updated) sink velocity
+       v_rel(1) = vel_gas(1) - sink_vp(ipart, 1)
+       v_rel(2) = vel_gas(2) - sink_vp(ipart, 2)
+       v_rel(3) = vel_gas(3) - sink_vp(ipart, 3)
+       v_rel_mag = sqrt(v_rel(1)**2 + v_rel(2)**2 + v_rel(3)**2)
+       if (v_rel_mag > 0.0_dp .and. cs_gas > 0.0_dp) then
+          mach = v_rel_mag / cs_gas
+          ! Both regimes are singular at mach=1, so the Mach number is clamped away from it
+          if (mach < 1.0_dp) then
+             ! Subsonic; series at small mach avoids cancellation
+             mach_c = min(mach, 0.99_dp)
+             if (mach_c < 0.01_dp) then
+                fI = mach_c**3 / 3.0_dp
+             else
+                fI = 0.5_dp * log((1.0_dp + mach_c) / (1.0_dp - mach_c)) - mach_c
+             endif
+          else
+             ! Supersonic, value for log(Lambda) taken from Beckmann+2018
+             mach_c = max(mach, 1.01_dp)
+             fI = 0.5_dp * log(mach_c**2 - 1.0_dp) + 4.0_dp
+          endif
+          ! Drag acceleration, limited so drag can at most cancel the relative velocity
+          drag_accel = fI * 4.0_dp * pi * factG**2 * sink_mp(ipart) * rho_av_all / v_rel_mag**2
+          dv_drag = min(drag_accel * dtnew, v_rel_mag)
+          sink_vp(ipart, 1) = sink_vp(ipart, 1) + dv_drag * v_rel(1) / v_rel_mag
+          sink_vp(ipart, 2) = sink_vp(ipart, 2) + dv_drag * v_rel(2) / v_rel_mag
+          sink_vp(ipart, 3) = sink_vp(ipart, 3) + dv_drag * v_rel(3) / v_rel_mag
+       endif
+    endif
+
+    !===========================================
     ! [D] Periodic box
     !===========================================
     if (j == 0) then
@@ -551,7 +587,7 @@ contains
          & real(r%gamma,kind=dp), real(r%smallr,kind=dp), real(r%smallc,kind=dp), &
          & real(r%acc_sink_boost**(-2d0/3d0),kind=dp), &
          & r%use_local_bondi_rate, r%bondi_use_vrel, r%bondi_use_gas_mass, r%use_rho_inf, &
-         & r%mass_weighting, r%momentum_conserving, r%fix_sink_mass, p%static, &
+         & r%mass_weighting, r%momentum_conserving, r%fix_sink_mass, p%static, r%drag_sink, &
          & real(r%box_size(1),kind=dp), real(r%box_size(2),kind=dp), real(r%box_size(3),kind=dp), &
          & macc_loc_d)
     call GPU_Error_Check(__FILE__, __LINE__)
