@@ -1309,6 +1309,14 @@ subroutine m_read_params(pst)
      endif
   endif
 
+#ifdef _CUDA
+  ! The GPU sink evolution does not provide the high frequency sink dump
+  if(sink.and.sink_delta_tout>0)then
+     write(*,*)'Error: sink_delta_tout>0 (high frequency sink dump) is not supported on GPU'
+     nml_ok=.false.
+  endif
+#endif
+
   ! eta_ohm is a synonym of etamag
   if(eta_ohm/=0.0d0)then
      if(etamag/=0.0d0.and.etamag/=eta_ohm)then
