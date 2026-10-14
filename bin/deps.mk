@@ -268,4 +268,3 @@ ifeq ($(MHD),1)
 godunov_utils.o: amr_commons.o amr_parameters.o hydro_parameters.o
 umuscl.o: amr_commons.o amr_parameters.o hydro_parameters.o
 endif
-

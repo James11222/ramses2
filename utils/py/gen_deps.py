@@ -146,7 +146,6 @@ def main():
     # Emit Makefile rules grouped by guard
     print("# Auto-generated Fortran module dependency rules for parallel make.")
     print("# Regenerate: python3 utils/py/gen_deps.py > bin/deps.mk")
-    print()
 
     all_guards = sorted(
         set(g for (_, g) in deps),
@@ -162,6 +161,7 @@ def main():
         }
         if not block:
             continue
+        print()
         if guard:
             print(guard)
         for obj in sorted(block):
@@ -169,7 +169,6 @@ def main():
             print(f"{obj}.o: {dep_list}")
         if guard:
             print("endif")
-        print()
 
 
 if __name__ == '__main__':
