@@ -128,6 +128,74 @@ contains
     psy = 1.0_dp
   end function psy_function_device
 
+  !> AGN feedback: test offset n of the (2R+1)^3 lattice around the sink. If the
+  !> cell at that offset receives feedback, return its unwrapped position, its
+  !> radial weight psy (> 0) and its density. Mirrors the weight pass of AGN_feedback.
+  attributes(device) subroutine agn_offset_device(n, radius, xcen, quasar_mode, jet, tan_theta, &
+       & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+       & box_ckey_min_d, box_ckey_max_d, periodic_d, ilevel, smallr, xbh, psy, d)
+    implicit none
+    integer(kind=4), intent(in), value :: n, radius
+    real(kind=dp), intent(in) :: xcen(3), jet(3)
+    logical, intent(in), value :: quasar_mode
+    real(kind=dp), intent(in), value :: tan_theta
+    integer(kind=8), device :: hash_key_d(*)
+    integer(kind=4), device :: hash_val_d(*)
+    integer(kind=4), intent(in), value :: hash_size_d
+    integer(kind=4), device :: ckey_max_d(*)
+    integer(kind=8), device :: key_off_d(*)
+    integer(kind=4), intent(in), value :: ngridmax
+    integer(kind=4), device :: box_ckey_min_d(3,*)
+    integer(kind=4), device :: box_ckey_max_d(3,*)
+    logical, device :: periodic_d(3)
+    integer(kind=4), intent(in), value :: ilevel
+    real(kind=dp), intent(in), value :: smallr
+    real(kind=dp), intent(out) :: xbh(3), psy, d
+
+    integer :: idim, nside, igrid, icell
+    integer(kind=4) :: ckey(3)
+    real(kind=dp) :: x_rel(3), r_rel, cone_dist, orth_dist
+
+    psy = 0.0_dp
+    d = 0.0_dp
+    nside = 2 * radius + 1
+    x_rel(1) = real(mod(n, nside) - radius, kind=dp)
+    x_rel(2) = real(mod(n / nside, nside) - radius, kind=dp)
+    x_rel(3) = real(n / (nside * nside) - radius, kind=dp)
+    r_rel = sqrt(x_rel(1)**2 + x_rel(2)**2 + x_rel(3)**2)
+    if (r_rel >= real(radius, kind=dp)) return
+
+    ! Jet mode: keep cells inside the cone, excluding the central cell
+    if (.not. quasar_mode) then
+       cone_dist = x_rel(1) * jet(1) + x_rel(2) * jet(2) + x_rel(3) * jet(3)
+       orth_dist = sqrt((x_rel(1) - cone_dist * jet(1))**2 + (x_rel(2) - cone_dist * jet(2))**2 &
+            & + (x_rel(3) - cone_dist * jet(3))**2)
+       if (orth_dist > abs(cone_dist) * tan_theta) return
+       if (r_rel < 1.0_dp) return
+    endif
+
+    ! Unwrapped position and periodic cartesian key of the cell
+    do idim = 1, 3
+       xbh(idim) = x_rel(idim) + xcen(idim)
+       ckey(idim) = floor(xbh(idim))
+       if (periodic_d(idim)) then
+          if (ckey(idim) <  box_ckey_min_d(idim, ilevel + 1)) &
+               & ckey(idim) = ckey(idim) - box_ckey_min_d(idim, ilevel + 1) + box_ckey_max_d(idim, ilevel + 1)
+          if (ckey(idim) >= box_ckey_max_d(idim, ilevel + 1)) &
+               & ckey(idim) = ckey(idim) + box_ckey_min_d(idim, ilevel + 1) - box_ckey_max_d(idim, ilevel + 1)
+       endif
+    end do
+
+    ! Missing or refined cells must not contribute to the weight normalization
+    call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+         & ilevel, ckey, igrid, icell)
+    if (igrid <= 0 .or. igrid > ngridmax) return
+    if (grid(igrid)%refined(icell)) return
+
+    psy = psy_function_device(quasar_mode, r_rel)
+    d = max(uold(icell, 1, igrid), smallr)
+  end subroutine agn_offset_device
+
   !> Sink evolution: one block per sink of level ilevel. Mirrors the loop
   !> body of sink_evolution in sink_evolution.f90: [A] accretion (one thread
   !> per B-spline cell), [B] dynamical friction, [C] AGN feedback, [D] periodic wrap.
@@ -141,6 +209,8 @@ contains
        & gamma, smallr, smallc, boost_fac, &
        & use_local_bondi_rate, bondi_use_vrel, bondi_use_gas_mass, use_rho_inf, &
        & mass_weighting, momentum_conserving, fix_sink_mass, static, drag_sink, &
+       & agn, agn_use_mass_weighting, agn_feedback_radius, tan_theta, agn_fbk_mode_switch_threshold, &
+       & epsilon_rad, epsilon_quasar, epsilon_radio, momentum_boost, c_code, &
        & bs1, bs2, bs3, macc_loc_d)
     implicit none
     integer(kind=8), device :: hash_key_d(*)
@@ -160,12 +230,18 @@ contains
     logical, intent(in), value :: use_local_bondi_rate, bondi_use_vrel, bondi_use_gas_mass, use_rho_inf
     logical, intent(in), value :: mass_weighting, momentum_conserving, fix_sink_mass, static
     logical, intent(in), value :: drag_sink
+    logical, intent(in), value :: agn, agn_use_mass_weighting
+    integer(kind=4), intent(in), value :: agn_feedback_radius
+    real(kind=dp), intent(in), value :: tan_theta, agn_fbk_mode_switch_threshold
+    real(kind=dp), intent(in), value :: epsilon_rad, epsilon_quasar, epsilon_radio, momentum_boost, c_code
     real(kind=dp), intent(in), value :: bs1, bs2, bs3
     real(kind=dp), device :: macc_loc_d
 
     real(kind=dp), parameter :: pi = 3.14159265358979_dp
     real(kind=dp), shared :: s_dMBH, s_rho_gas
     logical, shared :: s_skip
+    logical, shared :: s_do_agn, s_quasar
+    real(kind=dp), shared :: s_jet(3), s_xcen(3), s_fbk_ener, s_fbk_mom, s_total_weight, s_rho_gas_fb
     integer :: ipart, j, idim, igrid, icell, igridn, icelln, info
 #if NVAR>5+NENER
     integer :: ivar
@@ -183,6 +259,9 @@ contains
     real(kind=dp) :: rho_inf, dMBH, dMED
     real(kind=dp) :: d_acc, m_acc, x_acc(3), p_acc(3), l_acc(3)
     real(kind=dp) :: mach, mach_c, fI, v_rel_mag, drag_accel, dv_drag
+    integer :: n, nlat, jc
+    real(kind=dp) :: acc_ratio, jnorm, energy_agn, tw, rg, xbh(3), psy, w_fb, weight
+    real(kind=dp) :: fbk_mom_loc, cone_dist
 #ifdef MHD
     real(kind=dp) :: bx, by, bz
 #endif
@@ -494,6 +573,97 @@ contains
     endif
 
     !===========================================
+    ! [C] AGN feedback, mirrors AGN_feedback
+    !===========================================
+    if (agn) then
+       ! Thread 0 holds the accretion rates; nothing to inject without a positive rate
+       if (j == 0) then
+          s_do_agn = (dMBH > 0.0_dp)
+          if (s_do_agn) then
+             acc_ratio = 0.0_dp
+             if (dMED > 0.0_dp) acc_ratio = dMBH / dMED
+             jnorm = sqrt(sink_jp(ipart, 1)**2 + sink_jp(ipart, 2)**2 + sink_jp(ipart, 3)**2)
+             s_quasar = (acc_ratio > agn_fbk_mode_switch_threshold) .or. (jnorm <= 0.0_dp)
+             s_jet(1) = sink_jp(ipart, 1) / (jnorm + tiny(1.0_dp))
+             s_jet(2) = sink_jp(ipart, 2) / (jnorm + tiny(1.0_dp))
+             s_jet(3) = sink_jp(ipart, 3) / (jnorm + tiny(1.0_dp))
+             ! Sink position after accretion
+             s_xcen(1) = (sink_xp(ipart, 1) + skip1) / dx_loc
+             s_xcen(2) = (sink_xp(ipart, 2) + skip2) / dx_loc
+             s_xcen(3) = (sink_xp(ipart, 3) + skip3) / dx_loc
+             ! Quasar mode energy and radio mode momentum
+             energy_agn = epsilon_rad * dMBH * c_code**2 * dtnew
+             s_fbk_ener = epsilon_quasar * energy_agn
+             s_fbk_mom  = epsilon_radio * momentum_boost * energy_agn / c_code
+          endif
+       endif
+       call syncthreads()
+
+       if (s_do_agn) then
+          nlat = (2 * agn_feedback_radius + 1)**3
+
+          ! Weight pass: total weight and weighted density of the feedback region
+          tw = 0.0_dp; rg = 0.0_dp
+          do n = j, nlat - 1, blockDim%x
+             call agn_offset_device(n, agn_feedback_radius, s_xcen, s_quasar, s_jet, tan_theta, &
+                  & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+                  & box_ckey_min_d, box_ckey_max_d, periodic_d, ilevel, smallr, xbh, psy, d)
+             tw = tw + psy
+             rg = rg + d * psy
+          end do
+          tw = block_reduce_dp_sum(tw)
+          rg = block_reduce_dp_sum(rg)
+          if (j == 0) then
+             s_total_weight = tw
+             s_rho_gas_fb = 0.0_dp
+             if (tw > 0.0_dp) s_rho_gas_fb = rg / tw
+          endif
+          call syncthreads()
+
+          ! Scatter pass: CIC injection around each feedback cell
+          if (s_total_weight > 0.0_dp) then
+             do n = j, nlat - 1, blockDim%x
+                call agn_offset_device(n, agn_feedback_radius, s_xcen, s_quasar, s_jet, tan_theta, &
+                     & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+                     & box_ckey_min_d, box_ckey_max_d, periodic_d, ilevel, smallr, xbh, psy, d)
+                if (psy <= 0.0_dp) cycle
+                w_fb = psy / s_total_weight
+                do jc = 0, twotondim - 1
+                   call sink_bspline_device(2, xbh, jc, box_ckey_min_d, box_ckey_max_d, periodic_d, &
+                        & ilevel, ckey, xnei, w)
+                   x_rel(1:3) = xnei(1:3) - s_xcen(1:3)
+                   r_rel = sqrt(x_rel(1)**2 + x_rel(2)**2 + x_rel(3)**2)
+                   call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+                        & ilevel, ckey, igridn, icelln)
+                   if (igridn <= 0 .or. igridn > ngridmax) cycle
+                   if (grid(igridn)%refined(icelln)) cycle
+                   d     = max(uold(icelln, 1, igridn), smallr)
+                   vv(1) = uold(icelln, 2, igridn) / d
+                   vv(2) = uold(icelln, 3, igridn) / d
+                   vv(3) = uold(icelln, 4, igridn) / d
+                   weight = w * w_fb
+                   if (agn_use_mass_weighting) weight = weight * d / s_rho_gas_fb
+                   if (s_quasar) then
+                      ! Quasar mode (energy)
+                      info = atomicadd(unew(icelln, 5, igridn), s_fbk_ener * weight / vol_loc)
+                   else
+                      ! Radio mode (momentum and associated work)
+                      fbk_mom_loc = s_fbk_mom * weight / vol_loc
+                      cone_dist = (s_jet(1) * x_rel(1) + s_jet(2) * x_rel(2) + s_jet(3) * x_rel(3)) &
+                           & / (r_rel + tiny(1.0_dp))
+                      info = atomicadd(unew(icelln, 2, igridn), fbk_mom_loc * cone_dist * s_jet(1))
+                      info = atomicadd(unew(icelln, 3, igridn), fbk_mom_loc * cone_dist * s_jet(2))
+                      info = atomicadd(unew(icelln, 4, igridn), fbk_mom_loc * cone_dist * s_jet(3))
+                      info = atomicadd(unew(icelln, 5, igridn), fbk_mom_loc * cone_dist &
+                           & * (s_jet(1) * vv(1) + s_jet(2) * vv(2) + s_jet(3) * vv(3)))
+                   endif
+                end do
+             end do
+          endif
+       endif
+    endif
+
+    !===========================================
     ! [D] Periodic box
     !===========================================
     if (j == 0) then
@@ -528,6 +698,7 @@ contains
 
     real(kind=8) :: scale_nH, scale_T2, scale_l, scale_d, scale_t, scale_v
     real(kind=8) :: factG, lambda_sonic, edd_fac, dx_loc, vol_loc
+    real(kind=8) :: jet_angle, tan_theta, c_code
     real(kind=dp), device :: macc_loc_d
     integer :: head_idx, nsink_lev, nBHnei
 
@@ -571,6 +742,12 @@ contains
     ! Number of cells within the B-spline region
     nBHnei = r%sink_b_spline_order**ndim
 
+    ! AGN jet geometry safety net and speed of light in code units
+    jet_angle = max(tiny(0.0d0), r%agn_jet_opening_angle)
+    jet_angle = min(jet_angle, 180d0)
+    tan_theta = tan(pi/180d0*jet_angle/2) ! tangent of half of the opening angle
+    c_code = c_cgs/scale_v
+
     macc_loc_d = 0.0_dp
 
     call nvtxStartRange("GPU Sink Evolution Kernel", color=5)!red
@@ -588,6 +765,10 @@ contains
          & real(r%acc_sink_boost**(-2d0/3d0),kind=dp), &
          & r%use_local_bondi_rate, r%bondi_use_vrel, r%bondi_use_gas_mass, r%use_rho_inf, &
          & r%mass_weighting, r%momentum_conserving, r%fix_sink_mass, p%static, r%drag_sink, &
+         & r%agn, r%agn_use_mass_weighting, r%agn_feedback_radius, real(tan_theta,kind=dp), &
+         & real(r%agn_fbk_mode_switch_threshold,kind=dp), real(r%epsilon_rad,kind=dp), &
+         & real(r%epsilon_quasar,kind=dp), real(r%epsilon_radio,kind=dp), &
+         & real(r%momentum_boost,kind=dp), real(c_code,kind=dp), &
          & real(r%box_size(1),kind=dp), real(r%box_size(2),kind=dp), real(r%box_size(3),kind=dp), &
          & macc_loc_d)
     call GPU_Error_Check(__FILE__, __LINE__)
