@@ -2056,7 +2056,7 @@ contains
   subroutine gpu_user_flag(sim, ilevel, nflag)
     use nvtx
     use hydro_device, only: hydro_flag_kernel
-    use flag_device, only: count_flag1_kernel, poisson_flag_kernel
+    use flag_device, only: count_flag1_kernel, poisson_flag_kernel, mass_flag_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
@@ -2070,7 +2070,7 @@ contains
     real(kind=dp) :: err_grad_b2, floor_b2, err_grad_A, floor_A
     real(kind=dp) :: err_grad_B, floor_B, err_grad_C, floor_C
 #endif
-    real(kind=dp) :: m_refine, jeans_refine, mass_sph, dx, factG
+    real(kind=dp) :: m_refine, jeans_refine, mass_sph, dx, factG, d_thres
     integer(kind=8), device :: nflag_d
     integer(kind=8) :: nflag_h
 
@@ -2104,7 +2104,8 @@ contains
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
 
-    if(num_octs > 0)then
+    ! Refinement rules for the gravity solver
+    if(sim%r%poisson .and. num_octs > 0)then
        call nvtxStartRange("GPU user_flag", color=2)!yellow
        call poisson_flag_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, nref, uold, bold, &
             & head_idx, num_octs, gamma, smallr, smallc2, mass_sph, m_refine, jeans_refine, factG, dx)
@@ -2117,6 +2118,14 @@ contains
        threadsX_per_block = 8
        threadsY_per_block = 16
        num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+       ! Quasi-Lagrangian refinements without gravity
+       if(m_refine >= 0 .and. (.not. sim%r%poisson) .and. num_octs > 0)then
+          d_thres = m_refine * mass_sph / dx**ndim
+          call nvtxStartRange("GPU user_flag", color=2)!yellow
+          call mass_flag_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, uold, &
+               & head_idx, num_octs, d_thres)
+          call nvtxEndRange()
+       endif
        if(num_octs > 0)then
           call nvtxStartRange("GPU user_flag", color=2)!yellow
           call hydro_flag_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, grid, nbor, uold, bold, head_idx, num_octs, &

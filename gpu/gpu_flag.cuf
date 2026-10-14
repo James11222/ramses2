@@ -442,4 +442,32 @@ contains
   end subroutine poisson_flag_kernel
   ! =========================================================================
 
+  ! =========================================================================
+  !> Quasi-Lagrangian refinement without gravity: flag cells whose gas mass
+  !> exceeds m_refine*mass_sph. Mirrors the first block of hydro_flag.
+  attributes(global) subroutine mass_flag_kernel(flag1, uold, head_idx, num_octs, d_thres)
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_octs
+    real(kind=dp), intent(in), value :: d_thres
+
+    integer :: cell_idx, oct_idx, block_idx
+
+    block_idx = blockIdx%x - 1
+
+    ! Compute the oct idx
+    oct_idx = block_idx * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute the cell idx
+    cell_idx = threadIdx%x
+
+    ! Density threshold d_thres = m_refine*mass_sph/dx**3 is formed on the host
+    if (max(uold(cell_idx, 1, oct_idx), 0.0_dp) >= d_thres) flag1(cell_idx, oct_idx) = 1
+
+  end subroutine mass_flag_kernel
+  ! =========================================================================
+
 end module flag_device

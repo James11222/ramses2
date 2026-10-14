@@ -6,6 +6,7 @@ module flag_utils
 #ifdef _CUDA
   use gpu_utils, only: nsubgrid
   use gpu_runner, only: gpu_init_flag, gpu_enforce_rules, gpu_user_flag, gpu_enforce_subgrid
+  use sink_device, only: gpu_sink_flag
 #elif defined(_METAL)
   use metal_runner, only: metal_init_flag, metal_user_flag, metal_enforce_rules, &
        metal_enforce_subgrid, metal_nsubgrid
@@ -375,6 +376,8 @@ recursive subroutine r_user_flag(pst,ilevel,input_size,noct,output_size)
 
 #ifdef _CUDA
      if(pst%s%m%data_on_device)then
+        ! Refinement rules around sink particles (counted in gpu_user_flag)
+        if(pst%s%r%sink.and.pst%s%r%sink_refine)call gpu_sink_flag(pst%s,ilevel)
         call gpu_user_flag(pst%s, ilevel, nflag)
      else
         call user_flag(pst%s, ilevel, nflag)
@@ -661,7 +664,8 @@ subroutine sink_flag(s,p,ilevel)
         ! If missing, then cycle. This should never happens if sink_refine=.true.
         if(igridn<=0)cycle
 
-        ! Set refinement map flag1 to 1
+        ! Set refinement map flag1 to 1, counting only newly flagged cells
+        if(m%flag1(icelln,igridn)==0)g%nflag=g%nflag+1
         m%flag1(icelln,igridn)=1
 
      end do
