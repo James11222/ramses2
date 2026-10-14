@@ -404,6 +404,14 @@ contains
              ckey_div(1:ndim) = ckeynei(1:ndim,j)
              ckey_div(idim) = ckey_div(idim) + 1
 
+             ! Periodic boundary conditions
+             if(r%periodic(idim))then
+                if(ckey_div(idim)<m%box_ckey_min(idim,ilevel+1))ckey_div(idim)=m%box_ckey_max(idim,ilevel+1)-1
+                if(ckey_div(idim)>=m%box_ckey_max(idim,ilevel+1))ckey_div(idim)=m%box_ckey_min(idim,ilevel+1)
+             else if(ckey_div(idim)<m%box_ckey_min(idim,ilevel+1).or.ckey_div(idim)>=m%box_ckey_max(idim,ilevel+1))then
+                cycle
+             endif
+
              ! Get the cell information
              hash_nbor(1:ndim)  = ckey_div(1:ndim)
              call get_parent_cell(s,hash_nbor,igridn,icelln,flush_cache=.true.,fetch_cache=.true.)
@@ -417,6 +425,14 @@ contains
              ! 'Left' value
              ckey_div(1:ndim) = ckeynei(1:ndim,j)
              ckey_div(idim) = ckey_div(idim) - 1
+
+             ! Periodic boundary conditions
+             if(r%periodic(idim))then
+                if(ckey_div(idim)<m%box_ckey_min(idim,ilevel+1))ckey_div(idim)=m%box_ckey_max(idim,ilevel+1)-1
+                if(ckey_div(idim)>=m%box_ckey_max(idim,ilevel+1))ckey_div(idim)=m%box_ckey_min(idim,ilevel+1)
+             else if(ckey_div(idim)<m%box_ckey_min(idim,ilevel+1).or.ckey_div(idim)>=m%box_ckey_max(idim,ilevel+1))then
+                cycle
+             endif
 
              ! Get the cell information
              hash_nbor(1:ndim)  = ckey_div(1:ndim)
