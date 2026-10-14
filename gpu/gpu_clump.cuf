@@ -192,7 +192,103 @@ contains
     sim%c%ntest_tot = 0
     sim%c%npeak = 0
     sim%c%npeak_tot = 0
+
+    ! Deallocate host peak arrays filled by gpu_clump_to_host
+    if (allocated(sim%c%peak_pos)) then
+       deallocate(sim%c%npeak_cum)
+       deallocate(sim%c%peak_cell, sim%c%peak_grid, sim%c%peak_level, sim%c%max_dens)
+       deallocate(sim%c%saddle_dens, sim%c%saddle_nbor, sim%c%lev_peak, sim%c%new_peak)
+       deallocate(sim%c%relevance, sim%c%tidal_dens)
+       deallocate(sim%c%peak_pos, sim%c%peak_vel, sim%c%peak_acc, sim%c%peak_com)
+       deallocate(sim%c%min_dens, sim%c%n_cells, sim%c%clump_mass, sim%c%clump_vol, sim%c%clump_rad)
+       deallocate(sim%c%npart, sim%c%particle_mass, sim%c%ind_final)
+       if (allocated(sim%c%ind_halo)) deallocate(sim%c%ind_halo, sim%c%halo_mass, sim%c%mass_bin, sim%c%phi)
+       if (allocated(sim%c%nsink)) deallocate(sim%c%nsink, sim%c%form_sink)
+    endif
   end subroutine gpu_reset_clump
+
+  ! =========================================================================
+  ! Copy GPU clump finder results to the host for output (single rank).
+  ! Host arrays are deallocated in gpu_reset_clump.
+  ! =========================================================================
+  subroutine gpu_clump_to_host(sim)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+
+    integer :: npeak, j
+    real(kind=dp), allocatable, dimension(:,:) :: tmp
+
+    npeak = sim%c%npeak
+    if (npeak <= 0) return
+
+    associate(c=>sim%c, m=>sim%m)
+
+    ! Peak counts (single rank)
+    allocate(c%npeak_cum(0:sim%g%ncpu))
+    c%npeak_cum(0) = 0
+    c%npeak_cum(1) = npeak
+    c%npeak_max = npeak
+
+    ! Peak-patch properties
+    allocate(c%peak_cell(1:npeak));     c%peak_cell     = peak_cell_d(1:npeak)
+    allocate(c%peak_grid(1:npeak));     c%peak_grid     = peak_grid_d(1:npeak)
+    allocate(c%peak_level(1:npeak));    c%peak_level    = peak_level_d(1:npeak)
+    allocate(c%max_dens(1:npeak));      c%max_dens      = max_dens_d(1:npeak)
+    allocate(c%saddle_dens(1:npeak));   c%saddle_dens   = saddle_dens_d(1:npeak)
+    allocate(c%saddle_nbor(1:npeak));   c%saddle_nbor   = saddle_nbor_d(1:npeak)
+    allocate(c%lev_peak(1:npeak));      c%lev_peak      = lev_peak_d(1:npeak)
+    allocate(c%new_peak(1:npeak));      c%new_peak      = new_peak_d(1:npeak)
+    allocate(c%relevance(1:npeak));     c%relevance     = relevance_d(1:npeak)
+    allocate(c%tidal_dens(1:npeak));    c%tidal_dens    = tidal_dens_d(1:npeak)
+    allocate(c%min_dens(1:npeak));      c%min_dens      = min_dens_d(1:npeak)
+    allocate(c%n_cells(1:npeak));       c%n_cells       = n_cells_d(1:npeak)
+    allocate(c%clump_mass(1:npeak));    c%clump_mass    = clump_mass_d(1:npeak)
+    allocate(c%clump_vol(1:npeak));     c%clump_vol     = clump_vol_d(1:npeak)
+    allocate(c%clump_rad(1:npeak));     c%clump_rad     = clump_rad_d(1:npeak)
+    allocate(c%npart(1:npeak));         c%npart         = npart_d(1:npeak)
+    allocate(c%particle_mass(1:npeak)); c%particle_mass = particle_mass_d(1:npeak)
+
+    ! Device vectors are (ndim,npeak), host ones are (npeak,ndim)
+    allocate(tmp(1:ndim, 1:npeak))
+    allocate(c%peak_pos(1:npeak, 1:ndim)); tmp = peak_pos_d(:, 1:npeak); c%peak_pos = transpose(tmp)
+    allocate(c%peak_vel(1:npeak, 1:ndim)); tmp = peak_vel_d(:, 1:npeak); c%peak_vel = transpose(tmp)
+    allocate(c%peak_acc(1:npeak, 1:ndim)); tmp = peak_acc_d(:, 1:npeak); c%peak_acc = transpose(tmp)
+    allocate(c%peak_com(1:npeak, 1:ndim)); tmp = peak_com_d(:, 1:npeak); c%peak_com = transpose(tmp)
+    deallocate(tmp)
+
+    ! No final renumbering on the GPU: peak ids are final ids
+    allocate(c%ind_final(1:npeak))
+    do j = 1, npeak
+       c%ind_final(j) = j
+    end do
+
+    ! Halo-patch properties (mass profiles are not computed on the GPU)
+    if (c%saddle_threshold > 0) then
+       allocate(c%ind_halo(1:npeak));  c%ind_halo  = ind_halo_d(1:npeak)
+       allocate(c%halo_mass(1:npeak)); c%halo_mass = halo_mass_d(1:npeak)
+       allocate(c%mass_bin(1:npeak, 1:nbin)); c%mass_bin = 0.0d0
+       allocate(c%phi(1:npeak, 1:nbin));      c%phi      = 0.0d0
+    endif
+
+    ! Sink counts per peak
+    if (sim%r%sink) then
+       allocate(c%nsink(1:npeak));     c%nsink     = nsink_d(1:npeak)
+       allocate(c%form_sink(1:npeak)); c%form_sink = 0
+    endif
+
+    ! Mesh fields: halo id (flag1), peak id (flag2) and smoothed density
+    m%flag1 = flag1
+    m%flag2 = flag2
+    m%rho   = rho
+
+    ! Sink peak ids
+    if (sim%r%sink .and. allocated(sim%sink%pid)) then
+       sim%sink%pid(1:sim%sink%npart) = sink_pid(1:sim%sink%npart)
+    endif
+
+    end associate
+  end subroutine gpu_clump_to_host
 
   ! =========================================================================
   ! CUDA Kernel: Save raw density to nref for levelmin

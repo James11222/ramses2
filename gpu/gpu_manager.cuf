@@ -301,12 +301,14 @@ subroutine gpu_allocate_amr(sim)
 #endif
 
   allocate(grid(1:sim%m%ngridmax+sim%m%ncachemax))
-  if(sim%r%nlevelmax > sim%r%levelmin)then
+  if(sim%r%nlevelmax > sim%r%levelmin .or. sim%r%clump_finder .or. sim%r%sink_form)then
      allocate(flag1(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
      allocate(flag2(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
-     allocate(father(1:sim%m%ngridmax+sim%m%ncachemax))
      flag1=0
      flag2=0
+  endif
+  if(sim%r%nlevelmax > sim%r%levelmin)then
+     allocate(father(1:sim%m%ngridmax+sim%m%ncachemax))
      father=0
   endif
   nborarrsize = (sim%m%ngridmax + nsubgridtondim - 1) / nsubgridtondim
