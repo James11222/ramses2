@@ -768,11 +768,16 @@ contains
     ok_blast_agn = .true.
 
     rho_gas_fb=0d0; fbk_mom_agn=0d0; fbk_ener_agn=0d0
+
+    ! Nothing to inject without a positive accretion rate (this also
+    ! covers dMED_overdt=0 when accretion is disabled)
+    if(dMBH_overdt<=0.0d0)return
+
     if(ok_blast_agn)then
 
        ! Compute chi (fraction of Eddington)
-       acc_ratio = dMBH_overdt/dMED_overdt
-       acc_ratio = max(acc_ratio, 0.0d0)
+       acc_ratio = 0.0d0
+       if(dMED_overdt>0.0d0)acc_ratio = dMBH_overdt/dMED_overdt
 
        ! Check if quasar mode
        quasar_mode = (acc_ratio.gt.r%agn_fbk_mode_switch_threshold) .or. (norm2(p%jp(ipart,:)) .le. 0.0d0)
