@@ -343,7 +343,7 @@ subroutine m_read_params(pst)
 
   ! Interpolation parameters
   integer ::interpol_var=0
-  integer ::interpol_type=1
+  integer ::interpol_type=0
 
   ! Poisson solver parameters
   logical :: gravity_test=.false. ! Use file rho_ana.f90 to test the Poisson solers.

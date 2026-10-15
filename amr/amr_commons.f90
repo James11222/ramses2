@@ -221,7 +221,7 @@ module amr_commons
 
      ! Refinement parameters for hydro
      integer::interpol_var=0   ! Interpolated variables
-     integer::interpol_type=1  ! Interpolation scheme
+     integer::interpol_type=0  ! Interpolation scheme
      real(kind=8)::err_grad_d=-1.0  ! Density gradient
      real(kind=8)::err_grad_u=-1.0  ! Velocity gradient
      real(kind=8)::err_grad_p=-1.0  ! Pressure gradient
