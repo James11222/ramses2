@@ -641,6 +641,9 @@ contains
     num_subgrids = sim%m%noct(ilevel) / nsubgridtondim
     num_blocks = num_subgrids
 
+    ! Ghost octs must see the current coarse level variables
+    call gpu_refresh_cache(sim, ilevel)
+
     call nvtxStartRange("GPU Godunov", color=0)!green
 #ifdef PAPER
     threads_per_block = (2*nsubgrid + 4)**2
@@ -692,6 +695,41 @@ contains
     call nvtxEndRange()
 
   end subroutine gpu_godunov
+
+  !> @brief
+  !> Refresh the ghost octs of level ilevel in cache memory from their parent cells.
+  !>
+  !> @detail
+  !> Ghost octs are created in gpu_refine, but the coarse level variables they are
+  !> computed from can change before they are used. Call before reading them.
+  !>
+  subroutine gpu_refresh_cache(sim, ilevel)
+    use nvtx
+    use refine_device, only: refresh_cache_octs_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs
+    integer :: num_threads, num_blocks
+
+    ! Ghost octs exist only above levelmin
+    if (ilevel <= sim%r%levelmin) return
+
+    head_idx = sim%m%ngridmax + sim%m%head_cache(ilevel)
+    num_octs = sim%m%noct_cache(ilevel)
+    if (num_octs <= 0) return
+
+    num_threads = 128
+    num_blocks = (num_octs + num_threads - 1) / num_threads
+    call nvtxStartRange("GPU refresh cache", color=2)!yellow
+    call refresh_cache_octs_kernel<<<num_blocks, num_threads>>>(grid, uold, bold, f, father, &
+         & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+         & head_idx, num_octs, sim%r%interpol_var, sim%r%interpol_type, real(sim%r%smallr,kind=dp))
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+  end subroutine gpu_refresh_cache
 
   !> @brief
   !> Limit the time step of a level with refined cells by the explicit diffusion time step

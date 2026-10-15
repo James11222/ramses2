@@ -2331,4 +2331,91 @@ end subroutine nimhd_ghost_b_kernel
   end subroutine make_cache_octs_impl
   ! =========================================================================
 
+  ! =========================================================================
+  !> Refresh the hydro and gravity variables of existing cache (ghost) octs
+  !> from their parent cells, as in make_cache_octs_impl. One thread per oct.
+  attributes(global) subroutine refresh_cache_octs_kernel(grid, uold, bold, f, father, &
+       & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+       & head_idx, num_octs, interpol_var, interpol_type, smallr)
+    type(oct), device :: grid(*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    real(kind=dp), device :: bold(1:twotondim,1:6,*)
+    real(kind=dp), device :: f(1:twotondim,1:ndim,*)
+    integer(kind=4), device :: father(*)
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer(kind=4), intent(in), value :: hash_size
+    integer(kind=4), device :: ckey_max(*)
+    integer(kind=8), device :: key_off(*)
+    integer(kind=4), device :: box_ckey_min(1:ndim,*)
+    integer(kind=4), device :: box_ckey_max(1:ndim,*)
+    logical, device :: periodic(1:3)
+    integer(kind=4), intent(in), value :: head_idx, num_octs
+    integer(kind=4), intent(in), value :: interpol_var, interpol_type
+    real(kind=dp), intent(in), value :: smallr
+
+    integer :: cache_idx, parent_idx, cell_idx, ind, i, j, k, ivar
+    integer, dimension(1:ndim) :: ckey
+#ifdef MHD
+    ! Prolongation scratch for parent stencil and children.
+    real(kind=dp) :: u1(0:twondim,1:nvar)
+    real(kind=dp) :: u2(1:twotondim,1:nvar)
+    real(kind=dp) :: b1(0:twondim,1:6)
+    real(kind=dp) :: b2(1:twotondim,1:6)
+    real(kind=dp) :: b3(1:twondim,1:twotondim,1:6)
+    logical :: refined(1:twondim)
+#endif
+
+    ! Compute cache oct idx
+    cache_idx = threadIdx%x - 1 + (blockIdx%x - 1) * blockDim%x
+    if (cache_idx >= num_octs) return
+    cache_idx = head_idx + cache_idx
+
+    ! Get parent oct and parent cell idx
+    parent_idx = father(cache_idx)
+    ckey(1:ndim) = grid(cache_idx)%ckey(1:ndim)
+    i = ckey(1) - 2*grid(parent_idx)%ckey(1)
+    j = ckey(2) - 2*grid(parent_idx)%ckey(2)
+    k = ckey(3) - 2*grid(parent_idx)%ckey(3)
+    cell_idx = 1 + i + 2*j + 4*k
+
+#ifdef MHD
+    ! divB-preserving MHD prolongation
+    call gather_twondim_parent_stencil(grid, uold, bold, hash_key, hash_val, hash_size, &
+         & ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, grid(cache_idx)%lev, ckey, &
+         & parent_idx, cell_idx, u1, b1, b3, refined)
+    call interpol_mhd_d(u1, u2, b1, b2, b3, refined, interpol_var, interpol_type, smallr)
+    do ivar = 1, nvar
+       do ind = 1, twotondim
+          uold(ind,ivar,cache_idx) = u2(ind,ivar)
+       end do
+    end do
+    do ivar = 1, 6
+       do ind = 1, twotondim
+          bold(ind,ivar,cache_idx) = b2(ind,ivar)
+       end do
+    end do
+#else
+#ifdef HYDRO
+    ! Straight injection for hydro variables
+    do ivar = 1, nvar
+       do ind = 1, twotondim
+          uold(ind,ivar,cache_idx) = uold(cell_idx,ivar,parent_idx)
+       end do
+    end do
+#endif
+#endif
+
+#ifdef GRAV
+    ! Straight injection for gravity force
+    do ind = 1, twotondim
+       f(ind,1,cache_idx) = f(cell_idx,1,parent_idx)
+       f(ind,2,cache_idx) = f(cell_idx,2,parent_idx)
+       f(ind,3,cache_idx) = f(cell_idx,3,parent_idx)
+    end do
+#endif
+
+  end subroutine refresh_cache_octs_kernel
+  ! =========================================================================
+
 end module refine_device
