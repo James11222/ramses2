@@ -1600,7 +1600,10 @@ contains
     ! Create new octs and put them at the end
     head_idx = sim%m%head(ilevel)
     old_ifree = sim%m%ifree
-    num_octs = old_ifree - head_idx
+    num_octs = 0
+    do ilev = ilevel, sim%r%nlevelmax - 1
+       num_octs = num_octs + sim%m%noct(ilev)
+    end do
     threadsX_per_block = 8
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
