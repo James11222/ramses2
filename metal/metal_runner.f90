@@ -411,9 +411,9 @@ subroutine metal_init_flag(sim, ilevel, nflag)
   nflag = int(mtl_init_flag_batch( &
        int(sim%m%head(ilevel), c_int), &
        int(sim%m%noct(ilevel), c_int), &
-       int(sim%m%head(ilevel+1), c_int), &
-       int(merge(sim%m%noct(ilevel+1), 0, &
-       ilevel < sim%r%nlevelmax .and. sim%m%noct(ilevel+1) > 0), c_int)))
+       int(sim%m%head(min(ilevel+1, sim%r%nlevelmax)), c_int), &
+       int(merge(sim%m%noct(min(ilevel+1, sim%r%nlevelmax)), 0, &
+       ilevel < sim%r%nlevelmax .and. sim%m%noct(min(ilevel+1, sim%r%nlevelmax)) > 0), c_int)))
 
 end subroutine metal_init_flag
 

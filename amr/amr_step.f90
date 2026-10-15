@@ -496,7 +496,7 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
   !-----------------------
   ! Compute refinement map
   !-----------------------
-  if(ilevel<r%nlevelmax)then
+  if(r%nlevelmax>r%levelmin)then
      call m_timer('flag','start')
      if(.not.r%static_mesh)call m_flag_fine(pst,ilevel,icount)
   endif

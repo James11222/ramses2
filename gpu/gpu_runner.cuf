@@ -1992,14 +1992,16 @@ contains
        call nvtxEndRange()
     endif
 
-    head_idx = sim%m%head(ilevel+1)
-    num_octs = sim%m%noct(ilevel+1)
-    num_threads = 128
-    num_blocks = (num_octs + num_threads - 1) / num_threads
-    if (num_octs > 0) then
-       call nvtxStartRange("GPU init_flag", color=2)!yellow
-       call init_flag_kernel<<<num_blocks, num_threads>>>(flag1, grid, father, head_idx, num_octs)
-       call nvtxEndRange()
+    if (ilevel < sim%r%nlevelmax) then
+       head_idx = sim%m%head(ilevel+1)
+       num_octs = sim%m%noct(ilevel+1)
+       num_threads = 128
+       num_blocks = (num_octs + num_threads - 1) / num_threads
+       if (num_octs > 0) then
+          call nvtxStartRange("GPU init_flag", color=2)!yellow
+          call init_flag_kernel<<<num_blocks, num_threads>>>(flag1, grid, father, head_idx, num_octs)
+          call nvtxEndRange()
+       endif
     endif
 
     nflag_d = 0

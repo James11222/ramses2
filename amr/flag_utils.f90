@@ -26,9 +26,15 @@ subroutine m_flag_fine(pst,ilevel,icount)
 
   associate(r=>pst%s%r,g=>pst%s%g,m=>pst%s%m,mdl=>pst%s%mdl)
 
-  if(ilevel==r%nlevelmax)return
   if(ilevel<r%levelmin)return
   if(m%noct_tot(ilevel)==0)return
+
+  ! Finest level: no refinement, only reset flag1 to zero
+  if(ilevel==r%nlevelmax)then
+     call r_init_flag(pst,ilevel,1,nflag_tot,1)
+     return
+  endif
+
   if(r%verbose)write(*,111)ilevel
 111 format('   Entering flag_fine for level ',I2)
 
@@ -154,27 +160,29 @@ subroutine init_flag(s,ilevel,nflag)
   ! flagged son or a refined son.
   ! This ensures that refinement rules are satisfied.
   !---------------------------------------------------------
-  call open_cache(mdl, m, pack_size=storage_size(dummy_int4)/32, &
-       init=init_flush_initflag, flush=pack_flush_initflag, combine=unpack_flush_initflag)
+  if(ilevel<s%r%nlevelmax)then
+     call open_cache(mdl, m, pack_size=storage_size(dummy_int4)/32, &
+          init=init_flush_initflag, flush=pack_flush_initflag, combine=unpack_flush_initflag)
 
-  ! Loop over finer level grids
-  hash_key(0)=ilevel+1
-  do ichild=m%head(ilevel+1),m%tail(ilevel+1)
-     hash_key(1:ndim)=m%grid(ichild)%ckey(1:ndim)
-     call get_parent_cell(s,hash_key,igrid,icell,flush_cache=.true.,fetch_cache=.false.)
-     ok=.false.
-     ! Loop over cells
-     do ind=1,twotondim
-        ok=(ok.or.(m%grid(ichild)%refined(ind)))
-        ok=(ok.or.(m%flag1(ind,ichild)==1))
+     ! Loop over finer level grids
+     hash_key(0)=ilevel+1
+     do ichild=m%head(ilevel+1),m%tail(ilevel+1)
+        hash_key(1:ndim)=m%grid(ichild)%ckey(1:ndim)
+        call get_parent_cell(s,hash_key,igrid,icell,flush_cache=.true.,fetch_cache=.false.)
+        ok=.false.
+        ! Loop over cells
+        do ind=1,twotondim
+           ok=(ok.or.(m%grid(ichild)%refined(ind)))
+           ok=(ok.or.(m%flag1(ind,ichild)==1))
+        end do
+        if(ok)then
+           m%flag1(icell,igrid)=1
+           g%nflag=g%nflag+1
+        endif
      end do
-     if(ok)then
-        m%flag1(icell,igrid)=1
-        g%nflag=g%nflag+1
-     endif
-  end do
 
-  call close_cache(mdl)
+     call close_cache(mdl)
+  endif
 
   nflag=g%nflag
 
