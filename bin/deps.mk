@@ -1,7 +1,7 @@
 # Auto-generated Fortran module dependency rules for parallel make.
 # Regenerate: python3 utils/py/gen_deps.py > bin/deps.mk
 
-adaptive_loop.o: amr_step.o clump_finder.o init_amr.o init_cr.o init_hydro.o init_part.o init_refine_adaptive.o init_refine_basegrid.o init_refine_ramses.o init_refine_restart.o init_rt.o init_time.o init_xion.o input_part.o load_balance.o mdl.o ramses_commons.o read_params.o turb_init.o update_time.o
+adaptive_loop.o: amr_step.o clump_finder.o init_amr.o init_cr.o init_hydro.o init_part.o init_refine_adaptive.o init_refine_basegrid.o init_refine_ramses.o init_refine_restart.o init_rt.o init_time.o init_xion.o input_part.o load_balance.o mdl.o ramses_commons.o read_params.o refine_utils.o turb_init.o update_time.o
 amr_commons.o: amr_parameters.o cr_commons.o cr_parameters.o domain_hilbert.o hash.o hydro_commons.o hydro_parameters.o oct_commons.o rt_commons.o rt_parameters.o
 amr_step.o: clump_finder.o cooling_fine.o cr_godunov_fine.o cr_step.o feedback.o flag_utils.o godunov_fine.o interpol_phi.o lightcone.o move_fine.o movie.o newdt_fine.o output_amr.o pm_parameters.o ramses_commons.o refine_utils.o rho_fine.o rt_godunov_fine.o rt_step.o sink_evolution.o sink_formation.o sink_merger.o source_hydro_fine.o star_formation.o synchro_hydro_fine.o tree_formation.o turb_driving.o turb_hydro.o update_time.o upload.o
 boundana.o: amr_commons.o amr_parameters.o hydro_parameters.o
@@ -10,7 +10,7 @@ cache.o: amr_commons.o amr_parameters.o cache_commons.o clfind_commons.o hash.o 
 cache_commons.o: amr_parameters.o call_back.o cr_parameters.o hydro_parameters.o rt_parameters.o
 call_back.o: amr_commons.o amr_parameters.o clfind_commons.o ramses_commons.o
 clfind_commons.o: hash.o
-clump_finder.o: amr_parameters.o boundaries.o cache.o cache_commons.o clump_merger.o marshal.o mdl.o mdl_commons.o multigrid_fine_coarse.o nbors_utils.o output_clump.o ramses_commons.o
+clump_finder.o: amr_parameters.o boundaries.o cache.o cache_commons.o clump_merger.o marshal.o mdl.o mdl_commons.o multigrid_fine_coarse.o nbors_utils.o output_amr.o output_clump.o output_part.o ramses_commons.o
 clump_merger.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o clfind_commons.o hash.o hilbert.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o ramses_commons.o
 condinit.o: amr_commons.o amr_parameters.o constants.o hydro_parameters.o input_hydro_condinit.o
 cooling_fine.o: amr_commons.o amr_parameters.o constants.o cooling_module.o coolrates_module.o hydro_parameters.o mdl.o mdl_commons.o ramses_commons.o rt_parameters.o
@@ -172,7 +172,7 @@ endif
 ifeq ($(COMPILER),NVHPC)
 adaptive_loop.o: gpu_manager.o
 amr_step.o: gpu_manager.o
-clump_finder.o: gpu_clump.o
+clump_finder.o: gpu_clump.o gpu_manager.o
 clump_merger.o: gpu_clump.o
 cooling_fine.o: gpu_cooling.o gpu_runner.o
 courant_fine.o: gpu_runner.o

@@ -19,6 +19,7 @@ subroutine adaptive_loop(pst)
   use update_time_module, only: getmem, writemem, r_hash_stats
   use load_balance_module, only: r_balance_part
   use clump_finder_module, only: m_clump_finder
+  use refine_utils, only: m_refine_fine
 #ifdef _CUDA
   use gpu_manager, only: r_set_grid_device
   use nvtx
@@ -119,9 +120,13 @@ subroutine adaptive_loop(pst)
      call r_balance_part(pst,r%levelmin,1,dummy,0)
      tt2 = mdl_wtime(mdl)
      print '(A,F0.7)',' Time elapsed load balancing: ',tt2-tt1
+     call m_refine_fine(pst,r%levelmin)
      call m_clump_finder(pst,.true.,.false.)
      return
   endif
+
+  ! Static mesh runs never refine
+  if(r%static_mesh)call m_refine_fine(pst,r%levelmin)
 
   write(*,*)'Starting time integration'
 

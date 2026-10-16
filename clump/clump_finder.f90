@@ -3,11 +3,16 @@ module clump_finder_module
 contains
 subroutine m_clump_finder(pst,create_output,keep_alive)
   use output_clump_module
+  use output_part_module, only: r_output_part
+  use output_amr_module, only: output_header
   use amr_parameters, only: flen
   use mdl_module, only: mdl_mkdir, mdl_wtime
   use ramses_commons, only: pst_t
 #ifdef GRAV
   use rho_fine_module, only: m_rho_fine
+#endif
+#ifdef _CUDA
+  use gpu_manager, only: r_transfer_grid_host
 #endif
   implicit none
   type(pst_t)::pst
@@ -80,6 +85,38 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
         call output_peak_header(r,g,tree,filename)
      endif
      call r_output_clump(pst,input_array,flen/4,dummy,0)
+
+     ! In clump_only mode, also write the particles in the order matching the peak files
+     if(r%clump_only.and.r%pic)then
+#ifdef _CUDA
+        call r_transfer_grid_host(pst)
+#endif
+        if(r%part)then
+           filename=TRIM(filedir)//'part_header.txt'
+           call output_header(r,g,p   ,filename)
+        endif
+        if(r%star)then
+           filename=TRIM(filedir)//'star_header.txt'
+           call output_header(r,g,star,filename)
+        endif
+        if(r%sink)then
+           filename=TRIM(filedir)//'sink_header.txt'
+           call output_header(r,g,sink,filename)
+        endif
+        if(r%tree)then
+           filename=TRIM(filedir)//'tree_header.txt'
+           call output_header(r,g,tree,filename)
+        endif
+        if(r%trac)then
+           filename=TRIM(filedir)//'trac_header.txt'
+           call output_header(r,g,pst%s%trac,filename)
+        endif
+        if(r%dust)then
+           filename=TRIM(filedir)//'dust_header.txt'
+           call output_header(r,g,pst%s%dust,filename)
+        endif
+        call r_output_part(pst,input_array,flen/4,dummy,0)
+     endif
   endif
 
   !------------------------------------------
