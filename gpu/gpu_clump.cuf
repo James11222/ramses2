@@ -2180,10 +2180,10 @@ contains
 
     tid = threadIdx%x
     gid = tid + (blockIdx%x - 1) * blockDim%x
-    if (gid >= npart_new) return
+    if (gid > npart_new) return
 
-    jpeak = swap_local(1 + gid)
-    sink_idx = head_part + gid
+    jpeak = swap_local(gid)
+    sink_idx = head_part + gid - 1
 
     ilevel = peak_level_d(jpeak)
     dx_loc = boxlen / (2**ilevel)
@@ -2227,7 +2227,7 @@ contains
     ! Set merging id to 0
     sink_idm(sink_idx) = 0
     sink_levelp(sink_idx) = ilevel
-    sink_idp(sink_idx) = npart_tot_old + 1 + gid
+    sink_idp(sink_idx) = npart_tot_old + gid
   end subroutine sink_formation_kernel
 
   ! =========================================================================
