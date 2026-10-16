@@ -216,7 +216,7 @@ contains
     implicit none
     type(ramses_t) :: sim
 
-    integer :: npeak, j
+    integer :: npeak
     real(kind=dp), allocatable, dimension(:,:) :: tmp
 
     npeak = sim%c%npeak
@@ -257,18 +257,18 @@ contains
     allocate(c%peak_com(1:npeak, 1:ndim)); tmp = peak_com_d(:, 1:npeak); c%peak_com = transpose(tmp)
     deallocate(tmp)
 
-    ! No final renumbering on the GPU: peak ids are final ids
-    allocate(c%ind_final(1:npeak))
-    do j = 1, npeak
-       c%ind_final(j) = j
-    end do
+    ! Final clump ids (computed by trim_clumps)
+    allocate(c%ind_final(1:npeak)); c%ind_final = ind_final_d(1:npeak)
 
-    ! Halo-patch properties (mass profiles are not computed on the GPU)
+    ! Halo-patch properties
     if (c%saddle_threshold > 0) then
        allocate(c%ind_halo(1:npeak));  c%ind_halo  = ind_halo_d(1:npeak)
        allocate(c%halo_mass(1:npeak)); c%halo_mass = halo_mass_d(1:npeak)
-       allocate(c%mass_bin(1:npeak, 1:nbin)); c%mass_bin = 0.0d0
-       allocate(c%phi(1:npeak, 1:nbin));      c%phi      = 0.0d0
+       ! Device profiles are (nbin,npeak), host ones are (npeak,nbin)
+       allocate(tmp(1:nbin, 1:npeak))
+       allocate(c%mass_bin(1:npeak, 1:nbin)); tmp = mass_bin_d(:, 1:npeak);  c%mass_bin = transpose(tmp)
+       allocate(c%phi(1:npeak, 1:nbin));      tmp = phi_clump_d(:, 1:npeak); c%phi      = transpose(tmp)
+       deallocate(tmp)
     endif
 
     ! Sink counts per peak
@@ -1496,13 +1496,13 @@ contains
   ! =========================================================================
   attributes(global) subroutine init_peak_properties_kernel( &
        & peak_pos_d, peak_vel_d, peak_acc_d, peak_com_d, peak_grid_d, peak_cell_d, peak_level_d, &
-       & min_dens_d, n_cells_d, clump_mass_d, clump_vol_d, &
+       & min_dens_d, n_cells_d, clump_mass_d, clump_vol_d, npart_d, &
        & uold, f, grid, boxlen, skip, npeak, rtype)
     real(kind=dp), device :: peak_pos_d(1:ndim, *), peak_vel_d(1:ndim, *), peak_acc_d(1:ndim, *)
     real(kind=dp), device :: peak_com_d(1:ndim, *)
     integer, device :: peak_grid_d(*), peak_cell_d(*), peak_level_d(*)
     real(kind=dp), device :: min_dens_d(*), clump_mass_d(*), clump_vol_d(*)
-    integer, device :: n_cells_d(*)
+    integer, device :: n_cells_d(*), npart_d(*)
     real(kind=dp), device :: uold(1:twotondim, 1:nvar, *)
     real(kind=dp), device :: f(1:twotondim, 1:3, *)
     type(oct), device :: grid(*)
@@ -1521,6 +1521,7 @@ contains
     n_cells_d(ipeak) = 0
     clump_mass_d(ipeak) = 0.0d0
     clump_vol_d(ipeak) = 0.0d0
+    npart_d(ipeak) = 0
 
     ilevel = peak_level_d(ipeak)
     igrid = peak_grid_d(ipeak)
@@ -1630,7 +1631,7 @@ contains
     ! 1. Launch peak properties initialization
     call init_peak_properties_kernel<<<grid_size_peaks, block_size>>>( &
          & peak_pos_d, peak_vel_d, peak_acc_d, peak_com_d, peak_grid_d, peak_cell_d, peak_level_d, &
-         & min_dens_d, n_cells_d, clump_mass_d, clump_vol_d, &
+         & min_dens_d, n_cells_d, clump_mass_d, clump_vol_d, npart_d, &
          & uold, f, grid, sim%r%boxlen, d_skip, npeak, rtype)
 
     ! 2. Accumulate properties from cells
