@@ -30,7 +30,7 @@ The three namelist blocks `&SINK_PARAMS`, `&SINK_ACCRETION_PARAMS` and `&SINK_FE
 
 | Variable name           | Fortran type | Default value | Description                                                                                                    |
 |:------------------------|:-------------|:--------------|:---------------------------------------------------------------------------------------------------------------|
-| `accretion_type`        | `integer`    | 0             | Accretion recipe: 0 = none, 1 = Bondi-Hoyle-Lyttleton, 2 = flux (Bleuler+14), 3 = density threshold (accretes each step all gas above `sink_relevance_threshold*sink_density_threshold`, at most 75% of the accretion region). |
+| `accretion_type`        | `integer`    | 0             | Accretion recipe: 0 = none, 1 = Bondi-Hoyle-Lyttleton, 2 = flux (Bleuler+14), 3 = density threshold. |
 | `acc_sink_boost`        | `real`       | 1             | Boost factor for the Bondi accretion rate.                                                                     |
 | `bondi_use_vrel`        | `logical`    | `.true.`      | Include the relative sink-gas velocity in the Bondi denominator.                                               |
 | `bondi_use_gas_mass`    | `logical`    | `.false.`     | Add the local gas mass to the sink mass when computing the Bondi radius.                                       |
