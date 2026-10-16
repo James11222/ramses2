@@ -1224,6 +1224,24 @@ contains
   end subroutine update_alive_kernel
 
   ! =========================================================================
+  ! CUDA Kernel: Count surviving (alive) peaks after merging
+  ! =========================================================================
+  attributes(global) subroutine count_alive_kernel(alive_d, npeak, nalive)
+    integer, device :: alive_d(*)
+    integer, value :: npeak
+    integer, device :: nalive
+
+    integer :: ipeak, gid, tid, info
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    if (alive_d(ipeak) > 0) info = atomicadd(nalive, 1)
+  end subroutine count_alive_kernel
+
+  ! =========================================================================
   ! CUDA Kernels: Post-merge relevance processing
   ! =========================================================================
   attributes(global) subroutine propagate_merge_level_kernel(new_peak_d, lev_peak_d, ilev, npeak)
@@ -1376,8 +1394,8 @@ contains
 
     integer :: action_code
     integer :: block_size, grid_size_peaks, grid_size_test
-    integer, device :: nmove_d, nzero_d
-    integer :: nmove_h, nzero_h, idepth, iter, ilev
+    integer, device :: nmove_d, nzero_d, nalive_d
+    integer :: nmove_h, nzero_h, nsurvive_h, idepth, iter, ilev
 
     if (npeak == 0) return
 
@@ -1431,6 +1449,15 @@ contains
        nzero_h = nzero_d
        idepth = idepth + 1
     end do
+
+    ! Count surviving peaks
+    nalive_d = 0
+    call count_alive_kernel<<<grid_size_peaks, block_size>>>(alive_d, npeak, nalive_d)
+    nsurvive_h = nalive_d
+    if (sim%g%myid == 1) then
+       if (action == 'relevance') write(*,*)'Found',nsurvive_h,' relevant peaks'
+       if (action == 'saddleden') write(*,*)'Found',nsurvive_h,' halos'
+    endif
 
     sim%c%merge_levelmax = idepth - 2
 
