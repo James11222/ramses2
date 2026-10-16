@@ -90,8 +90,8 @@ contains
 
     integer :: ntestmax, nclumpmax
 
-    ntestmax = sim%m%ngridmax/10
-    nclumpmax = sim%m%ngridmax/100
+    ntestmax = sim%m%ngridmax
+    nclumpmax = sim%m%ngridmax/10
 
     ! Allocate test cell arrays
     if (.not. allocated(grid_d))           allocate(grid_d(1:ntestmax))
