@@ -58,8 +58,8 @@ eos_T2=4.29
 &REFINE_PARAMS
 jeans_refine=30*8.
 sink_refine=.true.
-interpol_var=0
-interpol_type=1
+interpol_var=1
+interpol_type=0
 /
 
 &SINK_PARAMS

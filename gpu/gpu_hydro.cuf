@@ -1198,7 +1198,76 @@ contains
     return
   end function riemann2d_upwind_emf
 
-  ! Dispatch 2D MHD EMF solver (HLLD, HLLF, else HLL).
+  ! 2D LLF EMF solver, identical to riemann2d_simple with riemann_llf_mhd (zero_flux=0) on the CPU:
+  ! centred average of the 4 corner EMFs plus the LLF diffusion of the two 1D problems.
+  attributes(device) function riemann2d_llf_emf(qLL, qLR, qRL, qRR, gamma) result(E)
+    type(primitive_t), intent(in) :: qLL, qLR, qRL, qRR
+    real(kind=dp), value :: gamma
+    real(kind=dp) :: E
+    real(kind=dp) :: ELL, ERL, ELR, ERR
+    real(kind=dp) :: dl, dr, pl, pr, ul, ur, al, ar, bl, br, cl, cr, a_mean, vmax
+
+    ELL = qLL%velocity_x*qLL%By - qLL%velocity_y*qLL%Bx
+    ERL = qRL%velocity_x*qRL%By - qRL%velocity_y*qRL%Bx
+    ELR = qLR%velocity_x*qLR%By - qLR%velocity_y*qLR%Bx
+    ERR = qRR%velocity_x*qRR%By - qRR%velocity_y*qRR%Bx
+    E = 0.25_dp*(ELL+ERL+ELR+ERR)
+
+    ! x problem: left = (LL+LR)/2, right = (RR+RL)/2, normal (u,Bx), transverse By
+    dl = 0.5_dp*(qLL%density+qLR%density)
+    dr = 0.5_dp*(qRR%density+qRL%density)
+    pl = 0.5_dp*(qLL%pressure+qLR%pressure)
+    pr = 0.5_dp*(qRR%pressure+qRL%pressure)
+    ul = 0.5_dp*(qLL%velocity_x+qLR%velocity_x)
+    ur = 0.5_dp*(qRR%velocity_x+qRL%velocity_x)
+    al = 0.5_dp*(qLL%Bx+qLR%Bx)
+    ar = 0.5_dp*(qRR%Bx+qRL%Bx)
+    bl = 0.5_dp*(qLL%By+qLR%By)
+    br = 0.5_dp*(qRR%By+qRL%By)
+    cl = 0.5_dp*(qLL%Bz+qLR%Bz)
+    cr = 0.5_dp*(qRR%Bz+qRL%Bz)
+    ! Enforce continuity of normal component
+    a_mean = 0.5_dp*(al+ar)
+    vmax = max(llf_speed_info(dl, pl, ul, a_mean, bl, cl, gamma), &
+         &     llf_speed_info(dr, pr, ur, a_mean, br, cr, gamma))
+    E = E - 0.5_dp*vmax*(br-bl)
+
+    ! y problem: left = (LL+RL)/2, right = (RR+LR)/2, normal (v,By), transverse Bx
+    dl = 0.5_dp*(qLL%density+qRL%density)
+    dr = 0.5_dp*(qRR%density+qLR%density)
+    pl = 0.5_dp*(qLL%pressure+qRL%pressure)
+    pr = 0.5_dp*(qRR%pressure+qLR%pressure)
+    ul = 0.5_dp*(qLL%velocity_y+qRL%velocity_y)
+    ur = 0.5_dp*(qRR%velocity_y+qLR%velocity_y)
+    al = 0.5_dp*(qLL%By+qRL%By)
+    ar = 0.5_dp*(qRR%By+qLR%By)
+    bl = 0.5_dp*(qLL%Bx+qRL%Bx)
+    br = 0.5_dp*(qRR%Bx+qLR%Bx)
+    cl = 0.5_dp*(qLL%Bz+qRL%Bz)
+    cr = 0.5_dp*(qRR%Bz+qLR%Bz)
+    ! Enforce continuity of normal component
+    a_mean = 0.5_dp*(al+ar)
+    vmax = max(llf_speed_info(dl, pl, ul, a_mean, bl, cl, gamma), &
+         &     llf_speed_info(dr, pr, ur, a_mean, br, cr, gamma))
+    E = E + 0.5_dp*vmax*(br-bl)
+
+    return
+  end function riemann2d_llf_emf
+
+  ! Absolute normal velocity plus fast magnetosonic speed, as find_speed_info on the CPU (no floors).
+  attributes(device) function llf_speed_info(d, p, u, a, b, c, gamma) result(v)
+    real(kind=dp), value :: d, p, u, a, b, c, gamma
+    real(kind=dp) :: v
+    real(kind=dp) :: c2, d2
+
+    c2 = gamma*p/d
+    d2 = 0.5_dp*((a*a+b*b+c*c)/d + c2)
+    v = abs(u) + sqrt(d2 + sqrt(max(d2**2 - c2*a*a/d, 0.0_dp)))
+
+    return
+  end function llf_speed_info
+
+  ! Dispatch 2D MHD EMF solver (HLLD, LLF, HLLF, else HLL).
   attributes(device) function riemann2d_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc, &
        & switch_llf_dmin, switch_llf_pmin, riemann2d) result(E)
     type(primitive_t), intent(in) :: qLL, qLR, qRL, qRR
@@ -1211,6 +1280,8 @@ contains
             & switch_llf_dmin, switch_llf_pmin)
     else if (riemann2d .eq. solver2d_upwind) then
        E = riemann2d_upwind_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc)
+    else if (riemann2d .eq. solver2d_llf) then
+       E = riemann2d_llf_emf(qLL, qLR, qRL, qRR, gamma)
     else if (riemann2d .eq. solver2d_hllf) then
        E = riemann2d_hll_emf(qLL, qLR, qRL, qRR, gamma, smallr, smallc)
     else
