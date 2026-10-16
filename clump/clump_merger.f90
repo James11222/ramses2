@@ -1364,6 +1364,7 @@ subroutine compute_clump_properties(s,rtype)
   !--------------------------------------------------------------------------
   c%min_dens=huge(zero); c%n_cells=0
   c%clump_mass=0d0; c%clump_vol=0d0
+  c%npart=0
 
   call open_cache_clump(mdl, c, storage_size(dummy_prop_clump)/32, &
        init=init_flush_prop, flush=pack_flush_prop, combine=unpack_flush_prop)
@@ -1515,10 +1516,14 @@ subroutine trim_clumps(s)
   integer,dimension(1:s%g%ncpu)::nfinal_cpu
   integer(kind=8),dimension(0:s%g%ncpu)::nfinal_cum
   integer::icpu,ipeak,jpeak,igrid,ilevel,ind,itest
+  logical::part_clump
 
   associate(g=>s%g,r=>s%r,m=>s%m,c=>s%c,mdl=>s%mdl)
 
   if(g%myid==1.and.r%verbose)write(*,*)'Entering trim_clumps'
+
+  ! The particle count criterion only applies to particle-based clumps
+  part_clump=(r%rho_type_clump>=1.and.r%rho_type_clump<=3)
 
   ! Change peak indexing to keep only relevant ones
   nfinal=0
@@ -1526,7 +1531,7 @@ subroutine trim_clumps(s)
   do ipeak=1,c%npeak
      if( c%clump_mass(ipeak) > c%mass_threshold.AND. &
           & c%relevance(ipeak) > c%relevance_threshold.AND. &
-          & c%npart(ipeak) > 0 ) then
+          & (c%npart(ipeak) > 0 .or. .not. part_clump) ) then
         nfinal=nfinal+1
         c%ind_final(ipeak)=nfinal
      endif
@@ -1552,7 +1557,7 @@ subroutine trim_clumps(s)
   do ipeak=1,c%npeak
      if( c%clump_mass(ipeak) > c%mass_threshold.AND. &
           & c%relevance(ipeak) > c%relevance_threshold.AND. &
-          & c%npart(ipeak) > 0 ) then
+          & (c%npart(ipeak) > 0 .or. .not. part_clump) ) then
         c%ind_final(ipeak)=c%ind_final(ipeak)+nfinal_cum(g%myid-1)
      endif
   end do
@@ -1563,13 +1568,15 @@ subroutine trim_clumps(s)
   do ipeak=1,c%npeak
      if( c%clump_mass(ipeak) > c%mass_threshold.AND. &
           & c%relevance(ipeak) > c%relevance_threshold.AND. &
-          & c%npart(ipeak) > 0 ) then
+          & (c%npart(ipeak) > 0 .or. .not. part_clump) ) then
         global_peak_id=c%new_peak(ipeak)
         call get_peak(s,global_peak_id,jpeak,flush_cache=.false.,fetch_cache=.true.)
         c%new_peak(ipeak)=c%ind_final(jpeak)
-        global_peak_id=c%ind_halo(ipeak)
-        call get_peak(s,global_peak_id,jpeak,flush_cache=.false.,fetch_cache=.true.)
-        c%ind_halo(ipeak)=c%ind_final(jpeak)
+        if(c%saddle_threshold>0)then
+           global_peak_id=c%ind_halo(ipeak)
+           call get_peak(s,global_peak_id,jpeak,flush_cache=.false.,fetch_cache=.true.)
+           c%ind_halo(ipeak)=c%ind_final(jpeak)
+        endif
      endif
   end do
   call close_cache(mdl)
@@ -1600,7 +1607,7 @@ subroutine trim_clumps(s)
         call get_peak(s,global_peak_id,ipeak,flush_cache=.false.,fetch_cache=.true.)
         if( c%clump_mass(ipeak) > c%mass_threshold.AND. &
              & c%relevance(ipeak) > c%relevance_threshold.AND. &
-             & c%npart(ipeak) > 0 ) then
+             & (c%npart(ipeak) > 0 .or. .not. part_clump) ) then
            m%flag2(ind,igrid)=c%ind_final(ipeak)
         else
            m%flag2(ind,igrid)=0
@@ -1612,7 +1619,7 @@ subroutine trim_clumps(s)
            call get_peak(s,global_halo_id,ipeak,flush_cache=.false.,fetch_cache=.true.)
            if( c%clump_mass(ipeak) > c%mass_threshold.AND. &
                 & c%relevance(ipeak) > c%relevance_threshold.AND. &
-                & c%npart(ipeak) > 0 ) then
+                & (c%npart(ipeak) > 0 .or. .not. part_clump) ) then
               m%flag1(ind,igrid)=c%ind_final(ipeak)
            else
               m%flag1(ind,igrid)=0
@@ -1646,8 +1653,12 @@ subroutine trim_particles(s,p)
   type(msg_prop_clump)::dummy_prop_clump
   integer::ipeak,ipart
   integer(kind=8)::global_peak_id
+  logical::part_clump
 
   associate(r=>s%r,g=>s%g,m=>s%m,c=>s%c,mdl=>s%mdl)
+
+  ! The particle count criterion only applies to particle-based clumps
+  part_clump=(r%rho_type_clump>=1.and.r%rho_type_clump<=3)
 
   call open_cache_clump(mdl, c, storage_size(dummy_prop_clump)/32, &
        pack=pack_fetch_prop, unpack=unpack_fetch_prop)
@@ -1657,7 +1668,7 @@ subroutine trim_particles(s,p)
         call get_peak(s,global_peak_id,ipeak,flush_cache=.false.,fetch_cache=.true.)
         if( c%clump_mass(ipeak) > c%mass_threshold.AND. &
              & c%relevance(ipeak) > c%relevance_threshold.AND. &
-             & c%npart(ipeak) > 0 ) then
+             & (c%npart(ipeak) > 0 .or. .not. part_clump) ) then
            p%pid(ipart)=c%ind_final(ipeak)
         else
            p%pid(ipart)=0

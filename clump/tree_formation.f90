@@ -107,9 +107,13 @@ subroutine tree_formation(r,g,m,p,c)
      !-------------------------------------
      ! Add here all tree formation criteria
      !-------------------------------------
-     if(c%ind_halo(j).NE.j+c%npeak_cum(g%myid-1))ok=.false.
+     if(c%saddle_threshold>0)then
+        if(c%ind_halo(j).NE.j+c%npeak_cum(g%myid-1))ok=.false.
+        if(c%halo_mass(j)<=10d0*c%mass_threshold)ok=.false.
+     else
+        if(c%clump_mass(j)<=10d0*c%mass_threshold)ok=.false.
+     endif
      if(c%relevance(j)<=c%relevance_threshold)ok=.false.
-     if(c%halo_mass(j)<=10d0*c%mass_threshold)ok=.false.
      if(c%npart(j)==0)ok=.false.
      if(c%ntree(j)>0)ok=.false.
      if(c%particle_mass(j)>0)then
