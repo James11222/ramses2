@@ -212,7 +212,7 @@ contains
        & head_idx, ilevel, order, nBHnei, accretion_type, &
        & skip1, skip2, skip3, dx_loc, vol_loc, dtnew, t, &
        & factG, lambda_sonic, edd_fac, eddington_cap, eddington_floor, &
-       & t_start_black_hole, manual_accretion_rate, sink_density_threshold, &
+       & t_start_black_hole, manual_accretion_rate, sink_density_threshold, sink_relevance_threshold, &
        & gamma, smallr, smallc, boost_fac, &
        & use_local_bondi_rate, bondi_use_vrel, bondi_use_gas_mass, use_rho_inf, &
        & mass_weighting, momentum_conserving, fix_sink_mass, static, drag_sink, &
@@ -233,6 +233,7 @@ contains
     real(kind=dp), intent(in), value :: skip1, skip2, skip3, dx_loc, vol_loc, dtnew, t
     real(kind=dp), intent(in), value :: factG, lambda_sonic, edd_fac, eddington_cap, eddington_floor
     real(kind=dp), intent(in), value :: t_start_black_hole, manual_accretion_rate, sink_density_threshold
+    real(kind=dp), intent(in), value :: sink_relevance_threshold
     real(kind=dp), intent(in), value :: gamma, smallr, smallc, boost_fac
     logical, intent(in), value :: use_local_bondi_rate, bondi_use_vrel, bondi_use_gas_mass, use_rho_inf
     logical, intent(in), value :: mass_weighting, momentum_conserving, fix_sink_mass, static
@@ -454,7 +455,10 @@ contains
              dMBH = dMBH * (1.0_dp + 0.1_dp * log(rho_gas / sink_density_threshold))
           endif
        else if (accretion_type == 3) then
-          dMBH = 0.5_dp * (rho_gas - sink_density_threshold) * vol_loc * real(nBHnei, kind=dp)
+          ! Accrete in one time step all the gas above the effective peak density for sink formation
+          dMBH = (rho_gas - sink_relevance_threshold * sink_density_threshold) * vol_loc &
+               & * real(nBHnei, kind=dp) / dtnew
+          dMBH = max(dMBH, 0.0_dp)
        endif
 
        ! Eddington rate and optional cap
@@ -1073,6 +1077,7 @@ contains
          & real(r%eddington_cap,kind=dp), real(r%eddington_floor,kind=dp), &
          & real(r%t_start_black_hole,kind=dp), real(r%manual_accretion_rate,kind=dp), &
          & real(r%sink_density_threshold,kind=dp), &
+         & real(r%sink_relevance_threshold,kind=dp), &
          & real(r%gamma,kind=dp), real(r%smallr,kind=dp), real(r%smallc,kind=dp), &
          & real(r%acc_sink_boost**(-2d0/3d0),kind=dp), &
          & r%use_local_bondi_rate, r%bondi_use_vrel, r%bondi_use_gas_mass, r%use_rho_inf, &

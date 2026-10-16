@@ -529,7 +529,11 @@ contains
 
     ! Compute threshold accretion rate
     else if(r%accretion_type==3)then
-       dMBH_overdt = 0.5d0*(rho_gas - r%sink_density_threshold)*vol_loc*dble(nBHnei)
+       ! Accrete in one time step all the gas above the effective peak density for sink formation
+       dMBH_overdt = (rho_gas - r%sink_relevance_threshold*r%sink_density_threshold)*vol_loc*dble(nBHnei) &
+            & / g%dtnew(ilevel)
+       dMBH_overdt = max(dMBH_overdt, 0.0d0)
+       if(r%verbose_sink)write(*,*)'Density: ',dMBH_overdt
     end if
 
     !-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
