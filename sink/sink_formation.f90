@@ -291,7 +291,7 @@ subroutine sink_formation(r,g,m,p,c,msink_loc)
   end do
   p%npart_tot=p%npart_tot+nsink_cum(g%ncpu)
 
-  if(g%myid==1)write(*,*)'Formed',int(nsink_cum(g%ncpu),kind=4),' new sinks for a total of',int(p%npart_tot,kind=4)
+  if(g%myid==1)write(*,'(" Formed",I11,"  new sinks for a total of ",I0)')int(nsink_cum(g%ncpu),kind=4),int(p%npart_tot,kind=4)
 
 #endif
 

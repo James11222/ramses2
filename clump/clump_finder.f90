@@ -370,7 +370,7 @@ subroutine collect_test(s)
   end do
   c%ntest_tot=ntest_cum(g%ncpu)
   if(g%myid==1)then
-     write(*,*)'Found',int(c%ntest_tot,kind=4),' cells above threshold'
+     write(*,'(" Found",I12,"  cells above threshold")')int(c%ntest_tot,kind=4)
   endif
 
   if (c%ntest>0) then
@@ -638,7 +638,7 @@ subroutine collect_peak(s)
   c%npeak_tot=c%npeak_cum(g%ncpu)
 #endif
   if (g%myid==1)then
-     write(*,*)'Found',int(c%npeak_tot,kind=4),' density peaks'
+     write(*,'(" Found",I12,"  density peaks")')int(c%npeak_tot,kind=4)
   endif
   end associate
 

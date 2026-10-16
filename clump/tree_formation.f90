@@ -195,7 +195,7 @@ subroutine tree_formation(r,g,m,p,c)
   end do
   p%npart_tot=p%npart_tot+ntree_cum(g%ncpu)
 
-  if(g%myid==1)write(*,*)'Found',int(ntree_cum(g%ncpu),kind=4),' new merger tree particles for a total of',int(p%npart_tot,kind=4)
+  if(g%myid==1)write(*,'(" Found",I12,"  new merger tree particles for a total of ",I0)')int(ntree_cum(g%ncpu),kind=4),int(p%npart_tot,kind=4)
 
 #endif
 

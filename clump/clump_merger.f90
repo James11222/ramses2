@@ -1046,10 +1046,10 @@ subroutine merge_clumps(s,action)
 #endif
   if(g%myid==1)then
      if(action.EQ.'relevance')then
-        write(*,*)'Found',nsurvive,' relevant peaks'
+        write(*,'(" Found",I12,"  relevant peaks")')nsurvive
      endif
      if(action.EQ.'saddleden')then
-        write(*,*)'Found',nsurvive,' halos'
+        write(*,'(" Found",I12,"  halos")')nsurvive
      endif
   endif
 

@@ -1455,8 +1455,8 @@ contains
     call count_alive_kernel<<<grid_size_peaks, block_size>>>(alive_d, npeak, nalive_d)
     nsurvive_h = nalive_d
     if (sim%g%myid == 1) then
-       if (action == 'relevance') write(*,*)'Found',nsurvive_h,' relevant peaks'
-       if (action == 'saddleden') write(*,*)'Found',nsurvive_h,' halos'
+       if (action == 'relevance') write(*,'(" Found",I12,"  relevant peaks")')nsurvive_h
+       if (action == 'saddleden') write(*,'(" Found",I12,"  halos")')nsurvive_h
     endif
 
     sim%c%merge_levelmax = idepth - 2
@@ -1836,7 +1836,7 @@ contains
     call gpu_collect_test(sim, sim%c%ntest)
     sim%c%ntest_tot = sim%c%ntest
     if (sim%g%myid == 1) then
-       write(*,*)'Found',int(sim%c%ntest_tot,kind=4),' cells above threshold'
+       write(*,'(" Found",I12,"  cells above threshold")')int(sim%c%ntest_tot,kind=4)
     endif
 
     if (sim%c%ntest_tot == 0) return
@@ -1845,7 +1845,7 @@ contains
     call gpu_collect_peak(sim, sim%c%ntest, sim%c%npeak)
     sim%c%npeak_tot = sim%c%npeak
     if (sim%g%myid == 1) then
-       write(*,*)'Found',int(sim%c%npeak_tot,kind=4),' density peaks'
+       write(*,'(" Found",I12,"  density peaks")')int(sim%c%npeak_tot,kind=4)
     endif
 
     if (sim%c%npeak_tot == 0) return
@@ -2338,7 +2338,7 @@ contains
     endif
 
     if (sim%g%myid == 1) then
-       write(*,*)'Formed',npart_new,' new sinks for a total of',int(sim%sink%npart_tot,kind=4)
+       write(*,'(" Formed",I11,"  new sinks for a total of ",I0)')npart_new,int(sim%sink%npart_tot,kind=4)
     endif
   end subroutine gpu_sink_formation
 
