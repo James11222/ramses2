@@ -1523,7 +1523,7 @@ subroutine trim_clumps(s)
   if(g%myid==1.and.r%verbose)write(*,*)'Entering trim_clumps'
 
   ! The particle count criterion only applies to particle-based clumps
-  part_clump=(r%rho_type_clump>=1.and.r%rho_type_clump<=3)
+  part_clump=(r%rho_type_clump==1.or.r%rho_type_clump==2)
 
   ! Change peak indexing to keep only relevant ones
   nfinal=0
@@ -1658,7 +1658,7 @@ subroutine trim_particles(s,p)
   associate(r=>s%r,g=>s%g,m=>s%m,c=>s%c,mdl=>s%mdl)
 
   ! The particle count criterion only applies to particle-based clumps
-  part_clump=(r%rho_type_clump>=1.and.r%rho_type_clump<=3)
+  part_clump=(r%rho_type_clump==1.or.r%rho_type_clump==2)
 
   call open_cache_clump(mdl, c, storage_size(dummy_prop_clump)/32, &
        pack=pack_fetch_prop, unpack=unpack_fetch_prop)

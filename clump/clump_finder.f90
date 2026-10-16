@@ -196,9 +196,6 @@ subroutine clump_finder(s)
   endif
   if(s%r%sink)then
      call particle_peak_id(s,s%sink)
-     if(s%r%rho_type_clump.eq.3)then
-        call particle_clump_properties(s,s%sink)
-     endif
   endif
   if(s%r%tree)then
      call particle_peak_id(s,s%tree)
@@ -262,6 +259,12 @@ subroutine clump_finder(s)
      if(s%r%tree)then
         call particle_halo_id(s,s%tree)
      endif
+  else
+     ! Without halo merging, each clump is its own halo
+     if(s%r%part)s%p%hid=s%p%pid
+     if(s%r%star)s%star%hid=s%star%pid
+     if(s%r%sink)s%sink%hid=s%sink%pid
+     if(s%r%tree)s%tree%hid=s%tree%pid
   endif
 #endif
 end subroutine clump_finder

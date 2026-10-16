@@ -9,7 +9,7 @@ module clump_device
        uold, f, periodic, box_ckey_min, box_ckey_max, ckey_max, key_off, d_skip, &
        sink_xp, sink_levelp, sink_pid, sink_vp, sink_fp, sink_mp, sink_tp, sink_idp, swap_local, &
        prefix_sum, box_size, xp, vp, mp, levelp, star_xp, star_vp, star_mp, star_levelp, &
-       sink_jp, sink_tm, sink_idm
+       sink_jp, sink_tm, sink_idm, pid, hid, star_pid, star_hid, sink_hid
   use part_device, only: dtnew_part_d
   implicit none
 
@@ -205,6 +205,11 @@ contains
        if (allocated(sim%c%ind_halo)) deallocate(sim%c%ind_halo, sim%c%halo_mass, sim%c%mass_bin, sim%c%phi)
        if (allocated(sim%c%nsink)) deallocate(sim%c%nsink, sim%c%form_sink)
     endif
+
+    ! Deallocate host particle peak and halo ids filled by gpu_clump_to_host
+    if (allocated(sim%p%pid))    deallocate(sim%p%pid, sim%p%hid)
+    if (allocated(sim%star%pid)) deallocate(sim%star%pid, sim%star%hid)
+    if (allocated(sim%sink%pid)) deallocate(sim%sink%pid, sim%sink%hid)
   end subroutine gpu_reset_clump
 
   ! =========================================================================
@@ -284,9 +289,39 @@ contains
     m%rho   = rho
 #endif
 
-    ! Sink peak ids
-    if (sim%r%sink .and. allocated(sim%sink%pid)) then
-       sim%sink%pid(1:sim%sink%npart) = sink_pid(1:sim%sink%npart)
+    ! Particle peak and halo ids (without halo merging, each clump is its own halo)
+    if (sim%r%part) then
+       allocate(sim%p%pid(1:sim%p%npart), sim%p%hid(1:sim%p%npart))
+       if (sim%p%npart > 0) then
+          sim%p%pid = pid(1:sim%p%npart)
+          if (c%saddle_threshold > 0) then
+             sim%p%hid = hid(1:sim%p%npart)
+          else
+             sim%p%hid = sim%p%pid
+          endif
+       endif
+    endif
+    if (sim%r%star) then
+       allocate(sim%star%pid(1:sim%star%npart), sim%star%hid(1:sim%star%npart))
+       if (sim%star%npart > 0) then
+          sim%star%pid = star_pid(1:sim%star%npart)
+          if (c%saddle_threshold > 0) then
+             sim%star%hid = star_hid(1:sim%star%npart)
+          else
+             sim%star%hid = sim%star%pid
+          endif
+       endif
+    endif
+    if (sim%r%sink) then
+       allocate(sim%sink%pid(1:sim%sink%npart), sim%sink%hid(1:sim%sink%npart))
+       if (sim%sink%npart > 0) then
+          sim%sink%pid = sink_pid(1:sim%sink%npart)
+          if (c%saddle_threshold > 0) then
+             sim%sink%hid = sink_hid(1:sim%sink%npart)
+          else
+             sim%sink%hid = sim%sink%pid
+          endif
+       endif
     endif
 
     end associate
@@ -1913,6 +1948,100 @@ contains
        ipeak = flag2(icell, igrid)
     endif
   end function particle_peak_id_device
+
+  ! =========================================================================
+  ! CUDA Kernel: Peak (flag2) or halo (flag1) id of the cell containing a particle
+  ! =========================================================================
+  attributes(global) subroutine particle_id_kernel(xp_d, levelp_d, id_d, flag, &
+       & hash_key, hash_val, hash_size, boxlen, levelmin, num_parts, leading)
+    integer(kind=8), value :: leading
+    real(kind=dp), device :: xp_d(*)
+    integer, device :: levelp_d(*), id_d(*)
+    integer, device :: flag(1:twotondim, *)
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer, value :: hash_size, levelmin, num_parts
+    real(kind=dp), value :: boxlen
+
+    integer :: ipart, gid, tid, idim
+    real(kind=dp) :: x(1:ndim)
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > num_parts) return
+
+    ipart = gid
+
+    ! Only particles in levels levelmin and above are assigned to peaks
+    id_d(ipart) = 0
+    if (levelp_d(ipart) < levelmin) return
+
+    do idim = 1, ndim
+       x(idim) = xp_d(ipart + (idim-1)*leading)
+    end do
+    id_d(ipart) = particle_peak_id_device(x, levelp_d(ipart), boxlen, flag, &
+         & hash_key, hash_val, hash_size)
+  end subroutine particle_id_kernel
+
+  ! =========================================================================
+  ! Host Driver: Particle peak ids (flag2) on GPU
+  ! =========================================================================
+  subroutine gpu_particle_peak_id(sim, ptype)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+    integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars, 3 = sinks
+
+    integer :: block_size, grid_size
+
+    block_size = 256
+    if (ptype == 1 .and. sim%p%npart > 0) then
+       grid_size = (sim%p%npart + block_size - 1) / block_size
+       call particle_id_kernel<<<grid_size, block_size>>>(xp, levelp, pid, flag2, &
+            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+            & sim%r%levelmin, sim%p%npart, int(sim%r%npartmax, kind=8))
+    else if (ptype == 2 .and. sim%star%npart > 0) then
+       grid_size = (sim%star%npart + block_size - 1) / block_size
+       call particle_id_kernel<<<grid_size, block_size>>>(star_xp, star_levelp, star_pid, flag2, &
+            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+            & sim%r%levelmin, sim%star%npart, int(sim%r%nstarmax, kind=8))
+    else if (ptype == 3 .and. sim%sink%npart > 0) then
+       grid_size = (sim%sink%npart + block_size - 1) / block_size
+       call particle_id_kernel<<<grid_size, block_size>>>(sink_xp, sink_levelp, sink_pid, flag2, &
+            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+            & sim%r%levelmin, sim%sink%npart, int(sim%r%nsinkmax, kind=8))
+    endif
+  end subroutine gpu_particle_peak_id
+
+  ! =========================================================================
+  ! Host Driver: Particle halo ids (flag1) on GPU
+  ! =========================================================================
+  subroutine gpu_particle_halo_id(sim, ptype)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+    integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars, 3 = sinks
+
+    integer :: block_size, grid_size
+
+    block_size = 256
+    if (ptype == 1 .and. sim%p%npart > 0) then
+       grid_size = (sim%p%npart + block_size - 1) / block_size
+       call particle_id_kernel<<<grid_size, block_size>>>(xp, levelp, hid, flag1, &
+            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+            & sim%r%levelmin, sim%p%npart, int(sim%r%npartmax, kind=8))
+    else if (ptype == 2 .and. sim%star%npart > 0) then
+       grid_size = (sim%star%npart + block_size - 1) / block_size
+       call particle_id_kernel<<<grid_size, block_size>>>(star_xp, star_levelp, star_hid, flag1, &
+            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+            & sim%r%levelmin, sim%star%npart, int(sim%r%nstarmax, kind=8))
+    else if (ptype == 3 .and. sim%sink%npart > 0) then
+       grid_size = (sim%sink%npart + block_size - 1) / block_size
+       call particle_id_kernel<<<grid_size, block_size>>>(sink_xp, sink_levelp, sink_hid, flag1, &
+            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+            & sim%r%levelmin, sim%sink%npart, int(sim%r%nsinkmax, kind=8))
+    endif
+  end subroutine gpu_particle_halo_id
 
   ! =========================================================================
   ! CUDA Kernel: Map sink particles to their grid cells and retrieve peak IDs

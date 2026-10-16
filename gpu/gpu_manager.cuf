@@ -462,6 +462,10 @@ subroutine gpu_allocate_part(sim)
   allocate(levelp(1:sim%r%npartmax))
   allocate(sortp(1:sim%r%npartmax))
   if (sim%r%nlevelmax > sim%r%levelmin) allocate(idp(1:sim%r%npartmax))
+  if (sim%r%clump_finder) then
+     allocate(pid(1:sim%r%npartmax))
+     allocate(hid(1:sim%r%npartmax))
+  endif
 #ifdef OUTPUT_PARTICLE_POTENTIAL
   allocate(phip(1:sim%r%npartmax))
 #endif
@@ -496,6 +500,10 @@ subroutine gpu_allocate_star(sim)
   allocate(star_sortp(1:sim%r%nstarmax))
   allocate(star_levelp(1:sim%r%nstarmax))
   if (sim%r%nlevelmax > sim%r%levelmin) allocate(star_idp(1:sim%r%nstarmax))
+  if (sim%r%clump_finder) then
+     allocate(star_pid(1:sim%r%nstarmax))
+     allocate(star_hid(1:sim%r%nstarmax))
+  endif
 #ifdef OUTPUT_PARTICLE_POTENTIAL
   allocate(star_phip(1:sim%r%nstarmax))
 #endif
@@ -532,6 +540,7 @@ subroutine gpu_allocate_sink(sim)
   allocate(sink_sortp(1:sim%r%nsinkmax))
   allocate(sink_levelp(1:sim%r%nsinkmax))
   allocate(sink_pid(1:sim%r%nsinkmax))
+  if (sim%r%clump_finder) allocate(sink_hid(1:sim%r%nsinkmax))
   allocate(sink_idp(1:sim%r%nsinkmax))
   allocate(sink_idm(1:sim%r%nsinkmax))
 #ifdef OUTPUT_PARTICLE_POTENTIAL

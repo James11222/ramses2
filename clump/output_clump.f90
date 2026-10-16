@@ -86,7 +86,7 @@ subroutine output_clump_properties(s,filename)
   if(s%r%cosmo)grav=3d0/8d0/pi*s%g%omega_m*s%g%aexp
 
   ! The particle count criterion only applies to particle-based clumps
-  part_clump=(r%rho_type_clump>=1.and.r%rho_type_clump<=3)
+  part_clump=(r%rho_type_clump==1.or.r%rho_type_clump==2)
   ! Mass profiles are only computed for dark matter clumps with halo merging
   ok_profile=(c%saddle_threshold>0.and.r%part.and.r%rho_type_clump==1)
 

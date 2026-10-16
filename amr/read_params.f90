@@ -488,7 +488,7 @@ subroutine m_read_params(pst)
   logical::output_peak_tree=.false.
   logical::output_peak_trac=.false.
   logical::output_peak_dust=.false.
-  integer::rho_type_clump=1 ! 1: DM, 2: stars, 3: sinks, 4: gas
+  integer::rho_type_clump=1 ! 0: all, 1: DM, 2: stars, 4: gas
   integer::nsteps_per_tree=1 ! Call clump finder for tree formation every n coarse steps
   real(kind=8)::relevance_threshold=2
   real(kind=8)::density_threshold=-1
@@ -1305,6 +1305,15 @@ subroutine m_read_params(pst)
      if(rho_type_sink/=1.and.rho_type_sink/=2.and.rho_type_sink/=4)then
         write(*,*)'Error: sink_form=.true. needs rho_type_sink = 1 (DM), 2 (stars) or 4 (gas)'
         write(*,*)'Currently rho_type_sink=',rho_type_sink
+        nml_ok=.false.
+     endif
+  endif
+
+  ! Check that the clump finder uses a valid density field
+  if(clump_finder)then
+     if(rho_type_clump/=0.and.rho_type_clump/=1.and.rho_type_clump/=2.and.rho_type_clump/=4)then
+        write(*,*)'Error: clump_finder=.true. needs rho_type_clump = 0 (all), 1 (DM), 2 (stars) or 4 (gas)'
+        write(*,*)'Currently rho_type_clump=',rho_type_clump
         nml_ok=.false.
      endif
   endif

@@ -48,6 +48,7 @@ module gpu_runner
   integer(kind=4), device, allocatable, dimension(:)   :: levelp
   integer(kind=4), device, allocatable, target, dimension(:)   :: sortp
   integer(i8b),    device, allocatable, dimension(:)   :: idp
+  integer(kind=4), device, allocatable, dimension(:)   :: pid, hid
 
   !> Arrays to hold the star particle variables on the device
   real(kind=dp),   device, allocatable, dimension(:,:) :: star_xp, star_vp
@@ -56,6 +57,7 @@ module gpu_runner
   integer(kind=4), device, allocatable, dimension(:)   :: star_levelp
   integer(kind=4), device, allocatable, target, dimension(:)   :: star_sortp
   integer(i8b),    device, allocatable, dimension(:)   :: star_idp
+  integer(kind=4), device, allocatable, dimension(:)   :: star_pid, star_hid
 
   !> Arrays to hold the star particle variables on the device
   real(kind=dp),   device, allocatable, dimension(:,:) :: sink_xp, sink_vp
@@ -66,6 +68,7 @@ module gpu_runner
   integer(kind=4), device, allocatable, target, dimension(:)   :: sink_sortp
   integer(i8b),    device, allocatable, dimension(:)   :: sink_idp
   integer(kind=4), device, allocatable, dimension(:)   :: sink_pid
+  integer(kind=4), device, allocatable, dimension(:)   :: sink_hid
   real(kind=dp),   device, allocatable, dimension(:)   :: sink_tm
   integer(i8b),    device, allocatable, dimension(:)   :: sink_idm
 
