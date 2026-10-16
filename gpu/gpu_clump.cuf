@@ -8,7 +8,7 @@ module clump_device
   use gpu_runner, only: grid, father, flag1, flag2, rho, nref, gpu_scan, hash_key, hash_val, &
        uold, f, periodic, box_ckey_min, box_ckey_max, ckey_max, key_off, d_skip, &
        sink_xp, sink_levelp, sink_pid, sink_vp, sink_fp, sink_mp, sink_tp, sink_idp, swap_local, &
-       prefix_sum, box_size, xp, vp, mp, levelp, star_xp, star_vp, star_mp, star_levelp, &
+       prefix_sum, box_size, xp, vp, mp, star_xp, star_vp, star_mp, &
        sink_jp, sink_tm, sink_idm, pid, hid, star_pid, star_hid, sink_hid
   use part_device, only: dtnew_part_d
   implicit none
@@ -1705,12 +1705,11 @@ contains
   ! CUDA Kernel: Accumulate particle mass, momentum and position into peaks
   ! =========================================================================
   attributes(global) subroutine particle_clump_properties_kernel( &
-       & xp_d, vp_d, mp_d, levelp_d, flag2, peak_pos_d, peak_level_d, &
+       & xp_d, vp_d, mp_d, flag2, peak_pos_d, peak_level_d, &
        & peak_com_d, peak_vel_d, particle_mass_d, npart_d, periodic, box_size, &
-       & hash_key, hash_val, hash_size, boxlen, levelmin, num_parts, leading)
+       & hash_key, hash_val, hash_size, boxlen, ilevel, head_part, num_parts, leading)
     integer(kind=8), value :: leading
     real(kind=dp), device :: xp_d(*), vp_d(*), mp_d(*)
-    integer, device :: levelp_d(*)
     integer, device :: flag2(1:twotondim, *)
     real(kind=dp), device :: peak_pos_d(1:ndim, *)
     integer, device :: peak_level_d(*)
@@ -1720,7 +1719,7 @@ contains
     real(kind=8), device :: box_size(3)
     integer(kind=8), device :: hash_key(*)
     integer(kind=4), device :: hash_val(*)
-    integer, value :: hash_size, levelmin, num_parts
+    integer, value :: hash_size, ilevel, head_part, num_parts
     real(kind=dp), value :: boxlen
 
     integer :: ipart, gid, tid, idim, ipeak, info
@@ -1730,15 +1729,13 @@ contains
     gid = tid + (blockIdx%x - 1) * blockDim%x
     if (gid > num_parts) return
 
-    ipart = gid
-
-    ! Only particles in levels levelmin and above are assigned to peaks
-    if (levelp_d(ipart) < levelmin) return
+    ! Particle of level ilevel (headp..tailp list, as on the CPU)
+    ipart = head_part + gid - 1
 
     do idim = 1, ndim
        x(idim) = xp_d(ipart + (idim-1)*leading)
     end do
-    ipeak = particle_peak_id_device(x, levelp_d(ipart), boxlen, flag2, &
+    ipeak = particle_peak_id_device(x, ilevel, boxlen, flag2, &
          & hash_key, hash_val, hash_size)
     if (ipeak == 0) return
 
@@ -1810,7 +1807,7 @@ contains
     integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars
     integer, intent(in) :: npeak
 
-    integer :: block_size, grid_size_peaks, grid_size_part
+    integer :: block_size, grid_size_peaks, grid_size_part, ilevel, num_parts
 
     if (npeak == 0) return
 
@@ -1823,19 +1820,27 @@ contains
 
     ! 2. Accumulate particle contributions
     if (ptype == 1 .and. sim%p%npart > 0) then
-       grid_size_part = (sim%p%npart + block_size - 1) / block_size
-       call particle_clump_properties_kernel<<<grid_size_part, block_size>>>( &
-            & xp, vp, mp, levelp, flag2, peak_pos_d, peak_level_d, &
-            & peak_com_d, peak_vel_d, particle_mass_d, npart_d, periodic, box_size, &
-            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
-            & sim%r%levelmin, sim%p%npart, int(sim%r%npartmax, kind=8))
+       do ilevel = sim%r%levelmin, sim%r%nlevelmax
+          num_parts = sim%p%tailp(ilevel) - sim%p%headp(ilevel) + 1
+          if (num_parts <= 0) cycle
+          grid_size_part = (num_parts + block_size - 1) / block_size
+          call particle_clump_properties_kernel<<<grid_size_part, block_size>>>( &
+               & xp, vp, mp, flag2, peak_pos_d, peak_level_d, &
+               & peak_com_d, peak_vel_d, particle_mass_d, npart_d, periodic, box_size, &
+               & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+               & ilevel, sim%p%headp(ilevel), num_parts, int(sim%r%npartmax, kind=8))
+       end do
     else if (ptype == 2 .and. sim%star%npart > 0) then
-       grid_size_part = (sim%star%npart + block_size - 1) / block_size
-       call particle_clump_properties_kernel<<<grid_size_part, block_size>>>( &
-            & star_xp, star_vp, star_mp, star_levelp, flag2, peak_pos_d, peak_level_d, &
-            & peak_com_d, peak_vel_d, particle_mass_d, npart_d, periodic, box_size, &
-            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
-            & sim%r%levelmin, sim%star%npart, int(sim%r%nstarmax, kind=8))
+       do ilevel = sim%r%levelmin, sim%r%nlevelmax
+          num_parts = sim%star%tailp(ilevel) - sim%star%headp(ilevel) + 1
+          if (num_parts <= 0) cycle
+          grid_size_part = (num_parts + block_size - 1) / block_size
+          call particle_clump_properties_kernel<<<grid_size_part, block_size>>>( &
+               & star_xp, star_vp, star_mp, flag2, peak_pos_d, peak_level_d, &
+               & peak_com_d, peak_vel_d, particle_mass_d, npart_d, periodic, box_size, &
+               & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+               & ilevel, sim%star%headp(ilevel), num_parts, int(sim%r%nstarmax, kind=8))
+       end do
     endif
 
     ! 3. Compute specific quantities and wrap center of mass
@@ -2609,15 +2614,15 @@ contains
   ! =========================================================================
   ! CUDA Kernel: Peak (flag2) or halo (flag1) id of the cell containing a particle
   ! =========================================================================
-  attributes(global) subroutine particle_id_kernel(xp_d, levelp_d, id_d, flag, &
-       & hash_key, hash_val, hash_size, boxlen, levelmin, num_parts, leading)
+  attributes(global) subroutine particle_id_kernel(xp_d, id_d, flag, &
+       & hash_key, hash_val, hash_size, boxlen, ilevel, head_part, num_parts, leading)
     integer(kind=8), value :: leading
     real(kind=dp), device :: xp_d(*)
-    integer, device :: levelp_d(*), id_d(*)
+    integer, device :: id_d(*)
     integer, device :: flag(1:twotondim, *)
     integer(kind=8), device :: hash_key(*)
     integer(kind=4), device :: hash_val(*)
-    integer, value :: hash_size, levelmin, num_parts
+    integer, value :: hash_size, ilevel, head_part, num_parts
     real(kind=dp), value :: boxlen
 
     integer :: ipart, gid, tid, idim
@@ -2627,18 +2632,47 @@ contains
     gid = tid + (blockIdx%x - 1) * blockDim%x
     if (gid > num_parts) return
 
-    ipart = gid
-
-    ! Only particles in levels levelmin and above are assigned to peaks
-    id_d(ipart) = 0
-    if (levelp_d(ipart) < levelmin) return
+    ! Particle of level ilevel (headp..tailp list, as on the CPU)
+    ipart = head_part + gid - 1
 
     do idim = 1, ndim
        x(idim) = xp_d(ipart + (idim-1)*leading)
     end do
-    id_d(ipart) = particle_peak_id_device(x, levelp_d(ipart), boxlen, flag, &
+    id_d(ipart) = particle_peak_id_device(x, ilevel, boxlen, flag, &
          & hash_key, hash_val, hash_size)
   end subroutine particle_id_kernel
+
+  ! =========================================================================
+  ! Host Driver: Peak or halo id of particles, level by level (as on the CPU)
+  ! =========================================================================
+  subroutine launch_particle_id(sim, p, xp_d, id_d, flag, leading)
+    use ramses_commons, only: ramses_t
+    use pm_commons, only: part_t
+    implicit none
+    type(ramses_t) :: sim
+    type(part_t) :: p
+    real(kind=dp), device :: xp_d(*)
+    integer, device :: id_d(*)
+    integer, device :: flag(1:twotondim, *)
+    integer(kind=8), intent(in) :: leading
+
+    integer :: block_size, grid_size, ilevel, num_parts
+
+    if (p%npart == 0) return
+
+    ! Particles below levelmin are not assigned to peaks
+    id_d(1:p%npart) = 0
+
+    block_size = 256
+    do ilevel = sim%r%levelmin, sim%r%nlevelmax
+       num_parts = p%tailp(ilevel) - p%headp(ilevel) + 1
+       if (num_parts <= 0) cycle
+       grid_size = (num_parts + block_size - 1) / block_size
+       call particle_id_kernel<<<grid_size, block_size>>>(xp_d, id_d, flag, &
+            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+            & ilevel, p%headp(ilevel), num_parts, leading)
+    end do
+  end subroutine launch_particle_id
 
   ! =========================================================================
   ! Host Driver: Particle peak ids (flag2) on GPU
@@ -2649,25 +2683,9 @@ contains
     type(ramses_t) :: sim
     integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars, 3 = sinks
 
-    integer :: block_size, grid_size
-
-    block_size = 256
-    if (ptype == 1 .and. sim%p%npart > 0) then
-       grid_size = (sim%p%npart + block_size - 1) / block_size
-       call particle_id_kernel<<<grid_size, block_size>>>(xp, levelp, pid, flag2, &
-            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
-            & sim%r%levelmin, sim%p%npart, int(sim%r%npartmax, kind=8))
-    else if (ptype == 2 .and. sim%star%npart > 0) then
-       grid_size = (sim%star%npart + block_size - 1) / block_size
-       call particle_id_kernel<<<grid_size, block_size>>>(star_xp, star_levelp, star_pid, flag2, &
-            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
-            & sim%r%levelmin, sim%star%npart, int(sim%r%nstarmax, kind=8))
-    else if (ptype == 3 .and. sim%sink%npart > 0) then
-       grid_size = (sim%sink%npart + block_size - 1) / block_size
-       call particle_id_kernel<<<grid_size, block_size>>>(sink_xp, sink_levelp, sink_pid, flag2, &
-            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
-            & sim%r%levelmin, sim%sink%npart, int(sim%r%nsinkmax, kind=8))
-    endif
+    if (ptype == 1) call launch_particle_id(sim, sim%p,    xp,      pid,      flag2, int(sim%r%npartmax, kind=8))
+    if (ptype == 2) call launch_particle_id(sim, sim%star, star_xp, star_pid, flag2, int(sim%r%nstarmax, kind=8))
+    if (ptype == 3) call launch_particle_id(sim, sim%sink, sink_xp, sink_pid, flag2, int(sim%r%nsinkmax, kind=8))
   end subroutine gpu_particle_peak_id
 
   ! =========================================================================
@@ -2679,56 +2697,10 @@ contains
     type(ramses_t) :: sim
     integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars, 3 = sinks
 
-    integer :: block_size, grid_size
-
-    block_size = 256
-    if (ptype == 1 .and. sim%p%npart > 0) then
-       grid_size = (sim%p%npart + block_size - 1) / block_size
-       call particle_id_kernel<<<grid_size, block_size>>>(xp, levelp, hid, flag1, &
-            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
-            & sim%r%levelmin, sim%p%npart, int(sim%r%npartmax, kind=8))
-    else if (ptype == 2 .and. sim%star%npart > 0) then
-       grid_size = (sim%star%npart + block_size - 1) / block_size
-       call particle_id_kernel<<<grid_size, block_size>>>(star_xp, star_levelp, star_hid, flag1, &
-            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
-            & sim%r%levelmin, sim%star%npart, int(sim%r%nstarmax, kind=8))
-    else if (ptype == 3 .and. sim%sink%npart > 0) then
-       grid_size = (sim%sink%npart + block_size - 1) / block_size
-       call particle_id_kernel<<<grid_size, block_size>>>(sink_xp, sink_levelp, sink_hid, flag1, &
-            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
-            & sim%r%levelmin, sim%sink%npart, int(sim%r%nsinkmax, kind=8))
-    endif
+    if (ptype == 1) call launch_particle_id(sim, sim%p,    xp,      hid,      flag1, int(sim%r%npartmax, kind=8))
+    if (ptype == 2) call launch_particle_id(sim, sim%star, star_xp, star_hid, flag1, int(sim%r%nstarmax, kind=8))
+    if (ptype == 3) call launch_particle_id(sim, sim%sink, sink_xp, sink_hid, flag1, int(sim%r%nsinkmax, kind=8))
   end subroutine gpu_particle_halo_id
-
-  ! =========================================================================
-  ! CUDA Kernel: Map sink particles to their grid cells and retrieve peak IDs
-  ! =========================================================================
-  attributes(global) subroutine gpu_sink_peak_id_kernel(nsink, levelmin, boxlen, flag2, &
-       & hash_key, hash_val, hash_size)
-    integer, value :: nsink, levelmin
-    real(kind=dp), value :: boxlen
-    integer, device :: flag2(1:twotondim, *)
-    integer(kind=8), device :: hash_key(*)
-    integer(kind=4), device :: hash_val(*)
-    integer, value :: hash_size
-
-    integer :: ipart, gid, tid
-    real(kind=dp) :: x(1:ndim)
-
-    tid = threadIdx%x
-    gid = tid + (blockIdx%x - 1) * blockDim%x
-    if (gid > nsink) return
-
-    ipart = gid
-
-    ! Only particles in levels levelmin and above are assigned to peaks
-    sink_pid(ipart) = 0
-    if (sink_levelp(ipart) < levelmin) return
-
-    x(1:ndim) = sink_xp(ipart, 1:ndim)
-    sink_pid(ipart) = particle_peak_id_device(x, sink_levelp(ipart), boxlen, flag2, &
-         & hash_key, hash_val, hash_size)
-  end subroutine gpu_sink_peak_id_kernel
 
   ! =========================================================================
   ! Host Driver: Map sink particles to peak IDs on GPU
@@ -2738,16 +2710,7 @@ contains
     implicit none
     type(ramses_t) :: sim
 
-    integer :: block_size, grid_size
-
-    if (sim%sink%npart == 0) return
-
-    block_size = 256
-    grid_size = (sim%sink%npart + block_size - 1) / block_size
-
-    call gpu_sink_peak_id_kernel<<<grid_size, block_size>>>( &
-         & sim%sink%npart, sim%r%levelmin, real(sim%r%boxlen, kind=dp), flag2, &
-         & hash_key, hash_val, sim%m%hash_size)
+    call launch_particle_id(sim, sim%sink, sink_xp, sink_pid, flag2, int(sim%r%nsinkmax, kind=8))
   end subroutine gpu_sink_peak_id
 
   ! =========================================================================
