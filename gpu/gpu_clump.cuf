@@ -2235,6 +2235,272 @@ contains
   end subroutine gpu_mass_profile
 
   ! =========================================================================
+  ! Device Function: Is this peak kept as a final clump?
+  ! =========================================================================
+  attributes(device) function keep_clump_device(clump_mass, relevance, npart, &
+       & mass_threshold, relevance_threshold, part_clump) result(keep)
+    real(kind=dp), value :: clump_mass, relevance, mass_threshold, relevance_threshold
+    integer, value :: npart
+    logical, value :: part_clump
+    logical :: keep
+
+    ! The particle count criterion only applies to particle-based clumps
+    keep = clump_mass > mass_threshold .and. relevance > relevance_threshold .and. &
+         & (npart > 0 .or. .not. part_clump)
+  end function keep_clump_device
+
+  ! =========================================================================
+  ! CUDA Kernel: Flag kept peaks (1) for the final index scan
+  ! =========================================================================
+  attributes(global) subroutine keep_clump_kernel(ind_final_d, clump_mass_d, relevance_d, npart_d, &
+       & mass_threshold, relevance_threshold, part_clump, npeak)
+    integer, device :: ind_final_d(*), npart_d(*)
+    real(kind=dp), device :: clump_mass_d(*), relevance_d(*)
+    real(kind=dp), value :: mass_threshold, relevance_threshold
+    logical, value :: part_clump
+    integer, value :: npeak
+
+    integer :: ipeak, gid, tid
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    if (keep_clump_device(clump_mass_d(ipeak), relevance_d(ipeak), npart_d(ipeak), &
+         & mass_threshold, relevance_threshold, part_clump)) then
+       ind_final_d(ipeak) = 1
+    else
+       ind_final_d(ipeak) = 0
+    endif
+  end subroutine keep_clump_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Zero the final index of dropped peaks (after the scan)
+  ! =========================================================================
+  attributes(global) subroutine drop_clump_kernel(ind_final_d, clump_mass_d, relevance_d, npart_d, &
+       & mass_threshold, relevance_threshold, part_clump, npeak)
+    integer, device :: ind_final_d(*), npart_d(*)
+    real(kind=dp), device :: clump_mass_d(*), relevance_d(*)
+    real(kind=dp), value :: mass_threshold, relevance_threshold
+    logical, value :: part_clump
+    integer, value :: npeak
+
+    integer :: ipeak, gid, tid
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    if (.not. keep_clump_device(clump_mass_d(ipeak), relevance_d(ipeak), npart_d(ipeak), &
+         & mass_threshold, relevance_threshold, part_clump)) ind_final_d(ipeak) = 0
+  end subroutine drop_clump_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Change parent and halo indices of kept peaks to final indices
+  ! =========================================================================
+  attributes(global) subroutine remap_peak_index_kernel(new_peak_d, ind_halo_d, ind_final_d, &
+       & do_halo, npeak)
+    integer, device :: new_peak_d(*), ind_halo_d(*), ind_final_d(*)
+    logical, value :: do_halo
+    integer, value :: npeak
+
+    integer :: ipeak, gid, tid
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    if (ind_final_d(ipeak) == 0) return
+    new_peak_d(ipeak) = ind_final_d(new_peak_d(ipeak))
+    if (do_halo) ind_halo_d(ipeak) = ind_final_d(ind_halo_d(ipeak))
+  end subroutine remap_peak_index_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Change particle peak ids to final indices (0 if dropped)
+  ! =========================================================================
+  attributes(global) subroutine trim_particles_kernel(id_d, ind_final_d, num_parts)
+    integer, device :: id_d(*), ind_final_d(*)
+    integer, value :: num_parts
+
+    integer :: ipart, gid, tid
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > num_parts) return
+
+    ipart = gid
+    if (id_d(ipart) /= 0) id_d(ipart) = ind_final_d(id_d(ipart))
+  end subroutine trim_particles_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Change peak (flag2) or halo (flag1) ids of test cells to final indices
+  ! =========================================================================
+  attributes(global) subroutine trim_flag_kernel(flag, grid_d, cell_d, ind_final_d, ntest)
+    integer, device :: flag(1:twotondim, *)
+    integer, device :: grid_d(*), cell_d(*), ind_final_d(*)
+    integer, value :: ntest
+
+    integer :: itest, gid, tid, igrid, ind
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > ntest) return
+
+    itest = gid
+    igrid = grid_d(itest)
+    ind = cell_d(itest)
+    if (flag(ind, igrid) /= 0) flag(ind, igrid) = ind_final_d(flag(ind, igrid))
+  end subroutine trim_flag_kernel
+
+  ! =========================================================================
+  ! Host Driver: Remove irrelevant clumps and renumber the final ones on GPU
+  ! =========================================================================
+  subroutine gpu_trim_clumps(sim)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+
+    integer :: block_size, grid_size_peaks, grid_size_test, grid_size_part
+    logical :: part_clump, do_halo
+    real(kind=dp) :: mass_threshold, relevance_threshold
+
+    if (sim%c%npeak == 0) return
+
+    ! The particle count criterion only applies to particle-based clumps
+    part_clump = (sim%r%rho_type_clump == 1 .or. sim%r%rho_type_clump == 2)
+    do_halo = (sim%c%saddle_threshold > 0)
+    mass_threshold = real(sim%c%mass_threshold, kind=dp)
+    relevance_threshold = real(sim%c%relevance_threshold, kind=dp)
+
+    block_size = 256
+    grid_size_peaks = (sim%c%npeak + block_size - 1) / block_size
+    grid_size_test = (sim%c%ntest + block_size - 1) / block_size
+
+    ! 1. Final clump indices: inclusive scan of kept peaks, 0 for dropped ones
+    call keep_clump_kernel<<<grid_size_peaks, block_size>>>(ind_final_d, clump_mass_d, relevance_d, &
+         & npart_d, mass_threshold, relevance_threshold, part_clump, sim%c%npeak)
+    call gpu_scan(ind_final_d, 1, sim%c%npeak)
+    call drop_clump_kernel<<<grid_size_peaks, block_size>>>(ind_final_d, clump_mass_d, relevance_d, &
+         & npart_d, mass_threshold, relevance_threshold, part_clump, sim%c%npeak)
+
+    ! 2. Change other important peak indices
+    call remap_peak_index_kernel<<<grid_size_peaks, block_size>>>(new_peak_d, ind_halo_d, ind_final_d, &
+         & do_halo, sim%c%npeak)
+
+    ! 3. Modify particle peak ids accordingly
+    if (sim%r%part .and. sim%p%npart > 0) then
+       grid_size_part = (sim%p%npart + block_size - 1) / block_size
+       call trim_particles_kernel<<<grid_size_part, block_size>>>(pid, ind_final_d, sim%p%npart)
+    endif
+    if (sim%r%star .and. sim%star%npart > 0) then
+       grid_size_part = (sim%star%npart + block_size - 1) / block_size
+       call trim_particles_kernel<<<grid_size_part, block_size>>>(star_pid, ind_final_d, sim%star%npart)
+    endif
+    if (sim%r%sink .and. sim%sink%npart > 0) then
+       grid_size_part = (sim%sink%npart + block_size - 1) / block_size
+       call trim_particles_kernel<<<grid_size_part, block_size>>>(sink_pid, ind_final_d, sim%sink%npart)
+    endif
+
+    ! 4. Modify flag2 (and flag1 if halos) accordingly
+    if (sim%c%ntest > 0) then
+       call trim_flag_kernel<<<grid_size_test, block_size>>>(flag2, grid_d, cell_d, ind_final_d, sim%c%ntest)
+       if (do_halo) then
+          call trim_flag_kernel<<<grid_size_test, block_size>>>(flag1, grid_d, cell_d, ind_final_d, sim%c%ntest)
+       endif
+    endif
+  end subroutine gpu_trim_clumps
+
+  ! =========================================================================
+  ! Host Driver: Complete clump finder workflow on the GPU
+  ! =========================================================================
+  subroutine gpu_clump_finder(sim)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+
+    ! 0. The GPU clump finder works on a single MPI rank only
+    if (sim%g%ncpu > 1) then
+       write(*,*) 'gpu_clump_finder: the GPU clump finder requires a single MPI rank'
+       stop
+    endif
+
+    ! 1. Store clump finder parameters in clump object
+    sim%c%relevance_threshold = sim%r%relevance_threshold
+    sim%c%density_threshold   = sim%r%density_threshold
+    sim%c%saddle_threshold    = sim%r%saddle_threshold
+    sim%c%mass_threshold      = sim%r%mass_threshold
+    sim%c%purity_threshold    = sim%r%purity_threshold
+    sim%c%fraction_threshold  = sim%r%fraction_threshold
+
+    ! 2. Smooth density field
+    call gpu_smooth_rho(sim)
+
+    ! 3. Collect test cells above threshold
+    call gpu_collect_test(sim, sim%c%ntest)
+    sim%c%ntest_tot = sim%c%ntest
+    if (sim%g%myid == 1) then
+       write(*,'(" Found",I12,"  cells above threshold")')int(sim%c%ntest_tot,kind=4)
+    endif
+    if (sim%c%ntest_tot == 0) return
+
+    ! 4. Detect local density peaks
+    call gpu_collect_peak(sim, sim%c%ntest, sim%c%npeak)
+    sim%c%npeak_tot = sim%c%npeak
+    if (sim%g%myid == 1) then
+       write(*,'(" Found",I12,"  density peaks")')int(sim%c%npeak_tot,kind=4)
+    endif
+    if (sim%c%npeak_tot == 0) return
+
+    ! 5. Watershed segmentation
+    call gpu_collect_patch(sim, sim%c%ntest, sim%c%npeak)
+
+    ! 6. Merge irrelevant peak-patches
+    call gpu_merge_clumps(sim, 'relevance', sim%c%ntest, sim%c%npeak)
+
+    ! 7. Peak-patch properties (peak ids saved into flag2)
+    call gpu_compute_clump_properties(sim, sim%r%rho_type_clump, sim%c%ntest, sim%c%npeak)
+
+    ! 8. Particle peak ids and particle-based peak-patch properties
+    if (sim%r%part) then
+       call gpu_particle_peak_id(sim, 1)
+       if (sim%r%rho_type_clump == 1) call gpu_particle_clump_properties(sim, 1, sim%c%npeak)
+    endif
+    if (sim%r%star) then
+       call gpu_particle_peak_id(sim, 2)
+       if (sim%r%rho_type_clump == 2) call gpu_particle_clump_properties(sim, 2, sim%c%npeak)
+    endif
+    if (sim%r%sink) then
+       call gpu_particle_peak_id(sim, 3)
+    endif
+
+    ! 9. Merge peak-patches into halo-patches (halo ids in flag1)
+    if (sim%c%saddle_threshold > 0) then
+       call gpu_merge_clumps(sim, 'saddleden', sim%c%ntest, sim%c%npeak)
+    endif
+
+    ! 10. Self-potential, unbinding and final mass profiles (dark matter)
+    if (sim%c%saddle_threshold > 0 .and. sim%r%part .and. sim%r%rho_type_clump == 1) then
+       call gpu_particle_potential(sim)
+       call gpu_particle_peak_id(sim, 1)
+       call gpu_particle_unbind(sim)
+       call gpu_mass_profile(sim)
+    endif
+
+    ! 11. Remove irrelevant clumps and renumber the final ones
+    call gpu_trim_clumps(sim)
+
+    ! 12. Particle halo ids
+    if (sim%c%saddle_threshold > 0) then
+       if (sim%r%part) call gpu_particle_halo_id(sim, 1)
+       if (sim%r%star) call gpu_particle_halo_id(sim, 2)
+       if (sim%r%sink) call gpu_particle_halo_id(sim, 3)
+    endif
+  end subroutine gpu_clump_finder
+
+  ! =========================================================================
   ! Host Driver: Complete clump finding workflow on the GPU
   ! =========================================================================
   subroutine gpu_sink_clump(sim)

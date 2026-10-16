@@ -104,6 +104,9 @@ recursive subroutine r_clump_finder(pst)
   use mdl_module
   use ramses_commons, only: pst_t
   use mdl_parameters
+#ifdef _CUDA
+  use clump_device, only: gpu_clump_finder
+#endif
   implicit none
   type(pst_t)::pst
 
@@ -114,7 +117,11 @@ recursive subroutine r_clump_finder(pst)
      call r_clump_finder(pst%pLower)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#ifdef _CUDA
+     call gpu_clump_finder(pst%s)
+#else
      call clump_finder(pst%s)
+#endif
   endif
 
 end subroutine r_clump_finder

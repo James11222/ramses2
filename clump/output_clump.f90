@@ -10,6 +10,9 @@ recursive subroutine r_output_clump(pst,input_array,input_size,output_array,outp
   use amr_parameters, only: flen
   use ramses_commons, only: pst_t
   use mdl_parameters
+#ifdef _CUDA
+  use clump_device, only: gpu_clump_to_host
+#endif
   implicit none
   type(pst_t)::pst
   integer,VALUE::input_size
@@ -26,6 +29,10 @@ recursive subroutine r_output_clump(pst,input_array,input_size,output_array,outp
      call mdl_get_reply(pst%s%mdl,rID,output_size)
   else
      filename=transfer(input_array,filename)
+#ifdef _CUDA
+     ! Copy the GPU clump finder results to the host
+     call gpu_clump_to_host(pst%s)
+#endif
      ! Write clump properties
      if(pst%s%r%output_clump)then
         call output_clump_properties(pst%s,filename)
