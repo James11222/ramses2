@@ -28,7 +28,7 @@ subroutine m_init_refine_ramses(pst)
   integer::i,ilevel,icpu,ilun,ipos,dummy(1)
   integer::levelmin_file,nlevelmax_file
   integer::levelmin_max,nlevelmax_min,noct_tmp
-  integer::ncpu_file,input_size,output_size
+  integer::ncpu_file_dummy,ncpu_file,input_size,output_size
   integer,dimension(:),allocatable::noct_file,noct_skip
   integer,dimension(:),allocatable::input_array,output_array
 
@@ -41,7 +41,7 @@ subroutine m_init_refine_ramses(pst)
 
   ! Read parameters from output file
   file_params=TRIM(r%initfile(r%levelmin))//'/params.bin'
-  call input_params(mdl,r,g,file_params,ncpu_file,levelmin_file,nlevelmax_file)
+  call input_params(mdl,r,g,file_params,ncpu_file,ncpu_file_dummy,levelmin_file,nlevelmax_file)
   write(*,'(" Output folder has levelmin=",I4)')levelmin_file
   write(*,'(" Output folder has levelmax=",I4)')nlevelmax_file
 
@@ -242,7 +242,8 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
   integer(kind=8),dimension(1:nhilbert,0:s%g%ncpu)::bound_key_target
 
   ! Local variables
-  integer::icpu,iskip_amr=0,iskip_hydro=0,iskip_grav=0,ilun
+  integer::icpu,ilun
+  integer(kind=8)::iskip_amr=0_8,iskip_hydro=0_8,iskip_grav=0_8
   integer::i,n,ind,istart,iend,noct_tmp,ilev,ioct,idim,i1,j1,k1
   integer::igrid,igrid_start,nleft,nright,ileft,iright
   character(LEN=80)::file_params,file_amr,file_hydro,file_grav
@@ -349,22 +350,24 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
      ! Prepare reading the AMR file
      file_amr=TRIM(r%initfile(r%levelmin))//'/amr.'//TRIM(ncharcpu)
      open(unit=10,file=file_amr,access="stream",action="read",form='unformatted')
-     iskip_amr=13+4*(nlevelmax_file-levelmin_file+1)+(4*ndim+4)*nskip_file(icpu)
+     iskip_amr=13_8+int(4*(nlevelmax_file-levelmin_file+1),kind=8)+&
+          & int((4*ndim+4),kind=8)*int(nskip_file(icpu),kind=8)
 
      ! Prepare reading the HYDRO file
      if(r%hydro)then
         file_hydro=TRIM(r%initfile(r%levelmin))//'/hydro.'//TRIM(ncharcpu)
         open(unit=11,file=file_hydro,access="stream",action="read",form='unformatted')
-        iskip_hydro=17+4*(nlevelmax_file-levelmin_file+1)+(4*twotondim*nprim)*nskip_file(icpu)
+        iskip_hydro=17_8+int(4*(nlevelmax_file-levelmin_file+1),8)+&
+             & int((4*twotondim*nprim),8)*int(nskip_file(icpu),kind=8)
      endif
 
      ! Loop over useful octs in file
      do i=istart,iend
 
         ! Read values from AMR files
-        ipos=iskip_amr+(4*ndim+4)*(i-1)
+        ipos=iskip_amr+int((4*ndim+4),kind=8)*int((i-1),kind=8)
         read(10,POS=ipos)ckey
-        ipos=iskip_amr+(4*ndim+4)*(i-1)+4*ndim
+        ipos=iskip_amr+int((4*ndim+4),kind=8)*int((i-1),kind=8)+int(4*ndim,kind=8)
         read(10,POS=ipos)refined_int
         do ind=1,twotondim
            refined(ind)=btest(refined_int,ind-1)
@@ -372,7 +375,7 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
 
         ! Read values from HYDRO files
         if(r%hydro)then
-           ipos=iskip_hydro+(4*twotondim*nprim)*(i-1)
+           ipos=iskip_hydro+int((4*twotondim*nprim),kind=8)*int((i-1),kind=8)
            read(11,POS=ipos)qout
         endif
 

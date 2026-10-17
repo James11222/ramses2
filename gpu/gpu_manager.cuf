@@ -37,6 +37,10 @@ recursive subroutine r_set_grid_device(pst)
      bold = pst%s%m%bold
 #endif
 #endif
+#ifdef GRAV
+     f = pst%s%m%f
+     phi = pst%s%m%phi
+#endif
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
 
@@ -77,9 +81,11 @@ recursive subroutine r_set_grid_device(pst)
         sink_jp     = pst%s%sink%jp
         sink_mp     = pst%s%sink%mp
         sink_tp     = pst%s%sink%tp
+        sink_tm     = pst%s%sink%tm
         sink_levelp = pst%s%sink%levelp
         sink_sortp  = pst%s%sink%sortp
-        if (allocated(sink_idp)) sink_idp = pst%s%sink%idp
+        sink_idp    = pst%s%sink%idp
+        sink_idm    = pst%s%sink%idm
         if (allocated(sink_pid) .and. allocated(pst%s%sink%pid)) sink_pid = pst%s%sink%pid
         call GPU_Error_Check(__FILE__, __LINE__)
         call nvtxEndRange()
@@ -200,9 +206,11 @@ subroutine gpu_to_host_part(pst)
      pst%s%sink%jp     = sink_jp
      pst%s%sink%mp     = sink_mp
      pst%s%sink%tp     = sink_tp
+     pst%s%sink%tm     = sink_tm
      pst%s%sink%levelp = sink_levelp
      pst%s%sink%sortp  = sink_sortp
-     if (allocated(sink_idp)) pst%s%sink%idp = sink_idp
+     pst%s%sink%idp    = sink_idp
+     pst%s%sink%idm    = sink_idm
      if (allocated(sink_pid) .and. allocated(pst%s%sink%pid)) pst%s%sink%pid = sink_pid
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
@@ -288,14 +296,20 @@ subroutine gpu_allocate_amr(sim)
   implicit none
   type(ramses_t) :: sim
   integer :: nborarrsize, ilevel
+#ifdef MHD
+  integer :: ng, nh, istat
+#endif
 
   allocate(grid(1:sim%m%ngridmax+sim%m%ncachemax))
-  if(sim%r%nlevelmax > sim%r%levelmin)then
+  if(sim%r%nlevelmax > sim%r%levelmin .or. sim%r%clump_finder .or. sim%r%sink_form .or. &
+       & sim%r%sink_merge)then
      allocate(flag1(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
      allocate(flag2(1:twotondim,1:sim%m%ngridmax+sim%m%ncachemax))
-     allocate(father(1:sim%m%ngridmax+sim%m%ncachemax))
      flag1=0
      flag2=0
+  endif
+  if(sim%r%nlevelmax > sim%r%levelmin)then
+     allocate(father(1:sim%m%ngridmax+sim%m%ncachemax))
      father=0
   endif
   nborarrsize = (sim%m%ngridmax + nsubgridtondim - 1) / nsubgridtondim
@@ -329,6 +343,21 @@ subroutine gpu_allocate_amr(sim)
   allocate(bnew(1:twotondim,1:6,1:sim%m%ngridmax+sim%m%ncachemax))
   bold=0d0
   bnew=0d0
+  if(sim%r%nimhd_solver/='unsplit')then
+     ng=sim%m%ngridmax+sim%m%ncachemax
+     allocate(b_roll2(1:twotondim,1:6,1:ng),b_my0(1:twotondim,1:6,1:ng),eta_nimhd(1:twotondim,1:2,1:ng),stat=istat)
+     if(istat==0.and.sim%r%nimhd_split=='strang'.and..not.sim%r%nimhd_composite)allocate(b_y0(1:twotondim,1:6,1:ng),stat=istat)
+     if(istat==0.and.sim%r%nimhd_composite)allocate(b_cf(1:twotondim,1:6,1:ng),stat=istat)
+     nh=1
+     if(.not.(sim%r%isothermal.or.sim%r%induction))nh=ng
+     if(istat==0)allocate(e_acc(1:twotondim,1:nh),stat=istat)
+     if(sim%r%nimhd_split/='strang')nh=1
+     if(istat==0)allocate(e_acc0(1:twotondim,1:nh),stat=istat)
+     if(istat/=0)then
+        write(*,*)'gpu_allocate_amr: not enough device memory for the split non-ideal MHD solver'
+        error stop
+     endif
+  endif
 #endif
 #ifdef TURB
   allocate(afield_last_d(1:ndim,0:TURB_GS-1,0:TURB_GS-1,0:TURB_GS-1))
@@ -377,7 +406,7 @@ subroutine gpu_allocate_amr(sim)
   key_off=sim%m%key_off
   periodic=sim%r%periodic
   box_size=sim%r%box_size
-  constant_gravity=sim%r%constant_gravity
+  constant_gravity=real(sim%r%constant_gravity,kind=dp)
   box_ckey_min=sim%m%box_ckey_min
   box_ckey_max=sim%m%box_ckey_max
   if(sim%r%nbound>0)then
@@ -433,6 +462,10 @@ subroutine gpu_allocate_part(sim)
   allocate(levelp(1:sim%r%npartmax))
   allocate(sortp(1:sim%r%npartmax))
   if (sim%r%nlevelmax > sim%r%levelmin) allocate(idp(1:sim%r%npartmax))
+  if (sim%r%clump_finder) then
+     allocate(pid(1:sim%r%npartmax))
+     allocate(hid(1:sim%r%npartmax))
+  endif
 #ifdef OUTPUT_PARTICLE_POTENTIAL
   allocate(phip(1:sim%r%npartmax))
 #endif
@@ -467,6 +500,10 @@ subroutine gpu_allocate_star(sim)
   allocate(star_sortp(1:sim%r%nstarmax))
   allocate(star_levelp(1:sim%r%nstarmax))
   if (sim%r%nlevelmax > sim%r%levelmin) allocate(star_idp(1:sim%r%nstarmax))
+  if (sim%r%clump_finder) then
+     allocate(star_pid(1:sim%r%nstarmax))
+     allocate(star_hid(1:sim%r%nstarmax))
+  endif
 #ifdef OUTPUT_PARTICLE_POTENTIAL
   allocate(star_phip(1:sim%r%nstarmax))
 #endif
@@ -499,10 +536,13 @@ subroutine gpu_allocate_sink(sim)
   allocate(sink_jp(1:sim%r%nsinkmax, 1:ndim))
   allocate(sink_mp(1:sim%r%nsinkmax))
   allocate(sink_tp(1:sim%r%nsinkmax))
+  allocate(sink_tm(1:sim%r%nsinkmax))
   allocate(sink_sortp(1:sim%r%nsinkmax))
   allocate(sink_levelp(1:sim%r%nsinkmax))
   allocate(sink_pid(1:sim%r%nsinkmax))
-  if (sim%r%nlevelmax > sim%r%levelmin) allocate(sink_idp(1:sim%r%nsinkmax))
+  if (sim%r%clump_finder) allocate(sink_hid(1:sim%r%nsinkmax))
+  allocate(sink_idp(1:sim%r%nsinkmax))
+  allocate(sink_idm(1:sim%r%nsinkmax))
 #ifdef OUTPUT_PARTICLE_POTENTIAL
   allocate(sink_phip(1:sim%r%nsinkmax))
 #endif

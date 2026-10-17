@@ -186,7 +186,9 @@ subroutine sink_formation(r,g,m,p,c,msink_loc)
      !-------------------------------------
      ! Add here all sink formation criteria
      !-------------------------------------
-     if(c%ind_halo(j).NE.j+c%npeak_cum(g%myid-1))ok=.false.
+     if(c%saddle_threshold>0)then
+        if(c%ind_halo(j).NE.j+c%npeak_cum(g%myid-1))ok=.false.
+     endif
      if(c%relevance(j)<=c%relevance_threshold)ok=.false.
      if(c%clump_mass(j)<=c%mass_threshold)ok=.false.
      if(c%nsink(j)>0)ok=.false.
@@ -289,7 +291,7 @@ subroutine sink_formation(r,g,m,p,c,msink_loc)
   end do
   p%npart_tot=p%npart_tot+nsink_cum(g%ncpu)
 
-  if(g%myid==1)write(*,*)'Formed',int(nsink_cum(g%ncpu),kind=4),' new sinks for a total of',int(p%npart_tot,kind=4)
+  if(g%myid==1)write(*,'(" Formed",I11,"  new sinks for a total of ",I0)')int(nsink_cum(g%ncpu),kind=4),int(p%npart_tot,kind=4)
 
 #endif
 
@@ -448,7 +450,7 @@ subroutine sink_clump(s)
   ! Count sinks in each clump hierarchically.
   !---------------------------------------------
   call particle_peak_id(s,s%sink)
-  call sink_in_peak(s,.true.,.true.)
+  call sink_in_peak(s,s%r%sink_recenter_on_peak,.true.)
 
 #endif
 end subroutine sink_clump

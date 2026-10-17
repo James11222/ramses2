@@ -4,6 +4,7 @@ module flag_device
   use oct_commons, only: oct
   use gpu_utils, only: nsubgrid, nsubgridsq, nsubgridtondim, nsubgridp2, nsubgridp2sq, subgridsize
   use cudafor
+  use feedback_device, only: get_cell_by_key
   implicit none
 
   !> @brief
@@ -440,6 +441,99 @@ contains
     if (ok) flag1(cell_idx, oct_idx) = 1
 
   end subroutine poisson_flag_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Quasi-Lagrangian refinement without gravity: flag cells whose gas mass
+  !> exceeds m_refine*mass_sph. Mirrors the first block of hydro_flag.
+  attributes(global) subroutine mass_flag_kernel(flag1, uold, head_idx, num_octs, d_thres)
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_octs
+    real(kind=dp), intent(in), value :: d_thres
+
+    integer :: cell_idx, oct_idx, block_idx
+
+    block_idx = blockIdx%x - 1
+
+    ! Compute the oct idx
+    oct_idx = block_idx * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute the cell idx
+    cell_idx = threadIdx%x
+
+    ! Density threshold d_thres = m_refine*mass_sph/dx**3 is formed on the host
+    if (max(uold(cell_idx, 1, oct_idx), 0.0_dp) >= d_thres) flag1(cell_idx, oct_idx) = 1
+
+  end subroutine mass_flag_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Sink refinement: flag cells of level ilevel within nrad cells of every sink
+  !> at level ilevel and finer. One block per sink, threads over the (2*nrad+1)**3
+  !> lattice. Mirrors sink_flag in flag_utils.f90.
+  attributes(global) subroutine sink_flag_kernel(flag1, sink_xp, leading, head_idx, &
+       & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+       & box_ckey_min_d, box_ckey_max_d, periodic_d, ilevel, nrad, skip1, skip2, skip3, dx_loc)
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    real(kind=dp), device :: sink_xp(*)
+    integer(kind=8), intent(in), value :: leading
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=8), device :: hash_key_d(*)
+    integer(kind=4), device :: hash_val_d(*)
+    integer(kind=4), intent(in), value :: hash_size_d
+    integer(kind=4), device :: ckey_max_d(*)
+    integer(kind=8), device :: key_off_d(*)
+    integer(kind=4), intent(in), value :: ngridmax
+    integer(kind=4), device :: box_ckey_min_d(3,*)
+    integer(kind=4), device :: box_ckey_max_d(3,*)
+    logical, device :: periodic_d(3)
+    integer(kind=4), intent(in), value :: ilevel, nrad
+    real(kind=dp), intent(in), value :: skip1, skip2, skip3, dx_loc
+
+    integer :: ipart, n, nside, idim, igrid, icell
+    integer(kind=4) :: ckey(3)
+    real(kind=dp) :: xcen(3), xnei(3), x_rel(3), xmin, xmax
+
+    ipart = head_idx + blockIdx%x - 1
+    nside = 2 * nrad + 1
+
+    ! Sink sphere center in units of current level Cartesian coordinates
+    xcen(1) = (sink_xp(ipart) + skip1) / dx_loc
+    xcen(2) = (sink_xp(ipart + leading) + skip2) / dx_loc
+    xcen(3) = (sink_xp(ipart + 2 * leading) + skip3) / dx_loc
+
+    ! Loop over sink sphere sampling points
+    do n = threadIdx%x - 1, nside**3 - 1, blockDim%x
+       x_rel(1) = real(mod(n, nside) - nrad, kind=dp)
+       x_rel(2) = real(mod(n / nside, nside) - nrad, kind=dp)
+       x_rel(3) = real(n / (nside * nside) - nrad, kind=dp)
+       if (x_rel(1)**2 + x_rel(2)**2 + x_rel(3)**2 > real(nrad * nrad, kind=dp)) cycle
+
+       ! Neighboring cell coordinates with periodic boundary conditions
+       do idim = 1, 3
+          xnei(idim) = xcen(idim) + x_rel(idim)
+          if (periodic_d(idim)) then
+             xmin = real(box_ckey_min_d(idim, ilevel + 1), kind=dp)
+             xmax = real(box_ckey_max_d(idim, ilevel + 1), kind=dp)
+             if (xnei(idim) <  xmin) xnei(idim) = xnei(idim) - xmin + xmax
+             if (xnei(idim) >= xmax) xnei(idim) = xnei(idim) + xmin - xmax
+          endif
+          ckey(idim) = int(xnei(idim))
+       end do
+
+       ! If missing, then cycle. This should never happen if sink_refine=.true.
+       call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+            & ilevel, ckey, igrid, icell)
+       if (igrid <= 0 .or. igrid > ngridmax) cycle
+
+       ! Set refinement map flag1 to 1
+       flag1(icell, igrid) = 1
+    end do
+  end subroutine sink_flag_kernel
   ! =========================================================================
 
 end module flag_device

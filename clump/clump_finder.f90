@@ -3,11 +3,16 @@ module clump_finder_module
 contains
 subroutine m_clump_finder(pst,create_output,keep_alive)
   use output_clump_module
+  use output_part_module, only: r_output_part
+  use output_amr_module, only: output_header
   use amr_parameters, only: flen
   use mdl_module, only: mdl_mkdir, mdl_wtime
   use ramses_commons, only: pst_t
 #ifdef GRAV
   use rho_fine_module, only: m_rho_fine
+#endif
+#ifdef _CUDA
+  use gpu_manager, only: r_transfer_grid_host
 #endif
   implicit none
   type(pst_t)::pst
@@ -80,6 +85,38 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
         call output_peak_header(r,g,tree,filename)
      endif
      call r_output_clump(pst,input_array,flen/4,dummy,0)
+
+     ! In clump_only mode, also write the particles in the order matching the peak files
+     if(r%clump_only.and.r%pic)then
+#ifdef _CUDA
+        call r_transfer_grid_host(pst)
+#endif
+        if(r%part)then
+           filename=TRIM(filedir)//'part_header.txt'
+           call output_header(r,g,p   ,filename)
+        endif
+        if(r%star)then
+           filename=TRIM(filedir)//'star_header.txt'
+           call output_header(r,g,star,filename)
+        endif
+        if(r%sink)then
+           filename=TRIM(filedir)//'sink_header.txt'
+           call output_header(r,g,sink,filename)
+        endif
+        if(r%tree)then
+           filename=TRIM(filedir)//'tree_header.txt'
+           call output_header(r,g,tree,filename)
+        endif
+        if(r%trac)then
+           filename=TRIM(filedir)//'trac_header.txt'
+           call output_header(r,g,pst%s%trac,filename)
+        endif
+        if(r%dust)then
+           filename=TRIM(filedir)//'dust_header.txt'
+           call output_header(r,g,pst%s%dust,filename)
+        endif
+        call r_output_part(pst,input_array,flen/4,dummy,0)
+     endif
   endif
 
   !------------------------------------------
@@ -104,6 +141,9 @@ recursive subroutine r_clump_finder(pst)
   use mdl_module
   use ramses_commons, only: pst_t
   use mdl_parameters
+#ifdef _CUDA
+  use clump_device, only: gpu_clump_finder
+#endif
   implicit none
   type(pst_t)::pst
 
@@ -114,7 +154,11 @@ recursive subroutine r_clump_finder(pst)
      call r_clump_finder(pst%pLower)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#ifdef _CUDA
+     call gpu_clump_finder(pst%s)
+#else
      call clump_finder(pst%s)
+#endif
   endif
 
 end subroutine r_clump_finder
@@ -196,9 +240,6 @@ subroutine clump_finder(s)
   endif
   if(s%r%sink)then
      call particle_peak_id(s,s%sink)
-     if(s%r%rho_type_clump.eq.3)then
-        call particle_clump_properties(s,s%sink)
-     endif
   endif
   if(s%r%tree)then
      call particle_peak_id(s,s%tree)
@@ -262,6 +303,12 @@ subroutine clump_finder(s)
      if(s%r%tree)then
         call particle_halo_id(s,s%tree)
      endif
+  else
+     ! Without halo merging, each clump is its own halo
+     if(s%r%part)s%p%hid=s%p%pid
+     if(s%r%star)s%star%hid=s%star%pid
+     if(s%r%sink)s%sink%hid=s%sink%pid
+     if(s%r%tree)s%tree%hid=s%tree%pid
   endif
 #endif
 end subroutine clump_finder
@@ -370,7 +417,7 @@ subroutine collect_test(s)
   end do
   c%ntest_tot=ntest_cum(g%ncpu)
   if(g%myid==1)then
-     write(*,*)'Found',int(c%ntest_tot,kind=4),' cells above threshold'
+     write(*,'(" Found",I12,"  cells above threshold")')int(c%ntest_tot,kind=4)
   endif
 
   if (c%ntest>0) then
@@ -638,7 +685,7 @@ subroutine collect_peak(s)
   c%npeak_tot=c%npeak_cum(g%ncpu)
 #endif
   if (g%myid==1)then
-     write(*,*)'Found',int(c%npeak_tot,kind=4),' density peaks'
+     write(*,'(" Found",I12,"  density peaks")')int(c%npeak_tot,kind=4)
   endif
   end associate
 

@@ -1,5 +1,8 @@
 module sink_evolution_module
   use rho_fine_module, only: cic_weight, cic_index, tsc_weight, tsc_index, pcs_weight, pcs_index
+#ifdef _CUDA
+  use sink_device, only: gpu_sink_evolution
+#endif
   type :: out_accretion_t
      real(kind=8)::mass
   end type out_accretion_t
@@ -27,7 +30,11 @@ contains
        call mdl_get_reply(pst%s%mdl,rID,output_size,next_output)
        output%mass=output%mass+next_output%mass
     else
+#ifdef _CUDA
+       call gpu_sink_evolution(pst%s,ilevel,output%mass)
+#else
        call sink_evolution(pst%s,pst%s%sink,ilevel,output%mass)
+#endif
     endif
 
   end subroutine r_sink_evolution
@@ -397,6 +404,14 @@ contains
              ckey_div(1:ndim) = ckeynei(1:ndim,j)
              ckey_div(idim) = ckey_div(idim) + 1
 
+             ! Periodic boundary conditions
+             if(r%periodic(idim))then
+                if(ckey_div(idim)<m%box_ckey_min(idim,ilevel+1))ckey_div(idim)=m%box_ckey_max(idim,ilevel+1)-1
+                if(ckey_div(idim)>=m%box_ckey_max(idim,ilevel+1))ckey_div(idim)=m%box_ckey_min(idim,ilevel+1)
+             else if(ckey_div(idim)<m%box_ckey_min(idim,ilevel+1).or.ckey_div(idim)>=m%box_ckey_max(idim,ilevel+1))then
+                cycle
+             endif
+
              ! Get the cell information
              hash_nbor(1:ndim)  = ckey_div(1:ndim)
              call get_parent_cell(s,hash_nbor,igridn,icelln,flush_cache=.true.,fetch_cache=.true.)
@@ -410,6 +425,14 @@ contains
              ! 'Left' value
              ckey_div(1:ndim) = ckeynei(1:ndim,j)
              ckey_div(idim) = ckey_div(idim) - 1
+
+             ! Periodic boundary conditions
+             if(r%periodic(idim))then
+                if(ckey_div(idim)<m%box_ckey_min(idim,ilevel+1))ckey_div(idim)=m%box_ckey_max(idim,ilevel+1)-1
+                if(ckey_div(idim)>=m%box_ckey_max(idim,ilevel+1))ckey_div(idim)=m%box_ckey_min(idim,ilevel+1)
+             else if(ckey_div(idim)<m%box_ckey_min(idim,ilevel+1).or.ckey_div(idim)>=m%box_ckey_max(idim,ilevel+1))then
+                cycle
+             endif
 
              ! Get the cell information
              hash_nbor(1:ndim)  = ckey_div(1:ndim)
@@ -465,7 +488,7 @@ contains
           v_rel(1:ndim) = vel_gas(1:ndim) - p%vp(ipart,1:ndim)
           if(r%bondi_use_vrel)then
              velocity   = norm2(v_rel(:))
-             v_bondi    = sqrt(velocity + cs_gas**2)
+             v_bondi    = sqrt(velocity**2 + cs_gas**2)
           else
              v_bondi    = cs_gas
           end if
@@ -506,7 +529,11 @@ contains
 
     ! Compute threshold accretion rate
     else if(r%accretion_type==3)then
-       dMBH_overdt = 0.5d0*(rho_gas - r%sink_density_threshold)*vol_loc*dble(nBHnei)
+       ! Accrete in one time step all the gas above the effective peak density for sink formation
+       dMBH_overdt = (rho_gas - r%sink_relevance_threshold*r%sink_density_threshold)*vol_loc*dble(nBHnei) &
+            & / g%dtnew(ilevel)
+       dMBH_overdt = max(dMBH_overdt, 0.0d0)
+       if(r%verbose_sink)write(*,*)'Density: ',dMBH_overdt
     end if
 
     !-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
@@ -761,11 +788,16 @@ contains
     ok_blast_agn = .true.
 
     rho_gas_fb=0d0; fbk_mom_agn=0d0; fbk_ener_agn=0d0
+
+    ! Nothing to inject without a positive accretion rate (this also
+    ! covers dMED_overdt=0 when accretion is disabled)
+    if(dMBH_overdt<=0.0d0)return
+
     if(ok_blast_agn)then
 
        ! Compute chi (fraction of Eddington)
-       acc_ratio = dMBH_overdt/dMED_overdt
-       acc_ratio = max(acc_ratio, 0.0d0)
+       acc_ratio = 0.0d0
+       if(dMED_overdt>0.0d0)acc_ratio = dMBH_overdt/dMED_overdt
 
        ! Check if quasar mode
        quasar_mode = (acc_ratio.gt.r%agn_fbk_mode_switch_threshold) .or. (norm2(p%jp(ipart,:)) .le. 0.0d0)
@@ -790,7 +822,14 @@ contains
                    ! Collect all of the necessary positions and cartesian keys
                    do idim=1,ndim
                       xBH_fb_nei(idim,iBHnei) = x_rel(idim) + xcen(idim)
-                      ckey_fb_nei(idim,iBHnei) = int(xBH_fb_nei(idim,iBHnei))
+                      ckey_fb_nei(idim,iBHnei) = floor(xBH_fb_nei(idim,iBHnei))
+                      ! Periodic boundary conditions
+                      if(r%periodic(idim))then
+                         if(ckey_fb_nei(idim,iBHnei)< m%box_ckey_min(idim,ilevel+1)) &
+                              & ckey_fb_nei(idim,iBHnei)=ckey_fb_nei(idim,iBHnei)-m%box_ckey_min(idim,ilevel+1)+m%box_ckey_max(idim,ilevel+1)
+                         if(ckey_fb_nei(idim,iBHnei)>=m%box_ckey_max(idim,ilevel+1)) &
+                              & ckey_fb_nei(idim,iBHnei)=ckey_fb_nei(idim,iBHnei)+m%box_ckey_min(idim,ilevel+1)-m%box_ckey_max(idim,ilevel+1)
+                      endif
                    end do
 
                    ! Compute the weight of the cell in question
@@ -809,9 +848,10 @@ contains
                       hash_nbor(1:ndim)  = ckey_fb_nei(1:ndim,iBHnei)
                       call get_parent_cell(s,hash_nbor,igridn,icelln,flush_cache=.true.,fetch_cache=.true.)
 
-                      ! If missing cycle (missing cells must not
+                      ! If missing or refined cycle (these cells must not
                       ! contribute to the weight normalization)
                       if(igridn==0)cycle
+                      if(m%grid(igridn)%refined(icelln))cycle
 
                       call psy_function(quasar_mode,r_rel,local_weight)
                       weight_fb_nei(iBHnei) = local_weight
@@ -935,7 +975,7 @@ contains
 
     ! See also Beckmann+2018 for a similar approach.
     !==================================================================
-    real(kind=8)::mach,v_rel_mag,I,drag_accel,dv_drag
+    real(kind=8)::mach,mach_c,v_rel_mag,I,drag_accel,dv_drag
     real(kind=8),dimension(1:ndim)::v_rel,v_rel_direction
 
     if(.not.s%r%drag_sink)return
@@ -952,15 +992,20 @@ contains
     ! Calculate the relative velocity direction
     v_rel_direction(1:ndim) = v_rel(1:ndim) / v_rel_mag
 
-    ! Compute the drag force
-    if(mach.lt.0.01)then
-       I = mach/3.0d0
-    else if(abs(mach-1).lt.0.01)then
-       I = 0.5*(0.5d0*log((mach+0.01)**2 - 1.0d0 + tiny(0.0d0)) &
-            & + 4.0d0 +  0.5d0*log((1.0d0+mach-0.01)/(1.0d0-mach+0.01+tiny(0.0d0))) - mach+0.01)
+    ! Compute the drag force. Both regimes are singular at mach=1,
+    ! so the Mach number is clamped away from it.
+    if(mach.lt.1.0d0)then
+       ! Subsonic (Ostriker 1999); series at small mach avoids cancellation
+       mach_c = min(mach, 0.99d0)
+       if(mach_c.lt.0.01d0)then
+          I = mach_c**3/3.0d0
+       else
+          I = 0.5d0*log((1.0d0+mach_c)/(1.0d0-mach_c)) - mach_c
+       end if
     else
-       ! Value for log(Lambda) taken from Beckmann+2018
-       I = 0.5d0*log(mach**2 - 1.0d0 + tiny(0.0d0)) + 4.0d0
+       ! Supersonic, value for log(Lambda) taken from Beckmann+2018
+       mach_c = max(mach, 1.01d0)
+       I = 0.5d0*log(mach_c**2 - 1.0d0) + 4.0d0
     end if
 
     ! Drag acceleration: force F = 4 pi I (G M)^2 rho / v_rel^2 divided
@@ -968,7 +1013,6 @@ contains
     drag_accel = I * 4.0d0*pi *factG**2 * p%mp(ipart) * rho_av_all / v_rel_mag**2
 
     ! Limit the kick so drag can at most cancel the relative velocity
-    ! (also tames the 1/v_rel divergence of the subsonic regime)
     dv_drag = min(drag_accel * s%g%dtnew(ilevel), v_rel_mag)
 
     ! Update the velocity of the sink towards the local gas velocity
@@ -1137,7 +1181,7 @@ contains
     ! CIC at level ilevel (dr: right cloud boundary; dl: left cloud boundary)
     do idim=1,ndim
        dr(idim)=x(idim)+0.5D0
-       ir(idim)=int(dr(idim))
+       ir(idim)=floor(dr(idim))
        dr(idim)=dr(idim)-ir(idim)
        dl(idim)=1.0D0-dr(idim)
        il(idim)=ir(idim)-1
@@ -1159,8 +1203,10 @@ contains
     ! Periodic boundary conditions
     do idim=1,ndim
        if(r%periodic(idim))then
-          if(il(idim)< m%box_ckey_min(idim,ilevel+1))il(idim)=m%box_ckey_max(idim,ilevel+1)-1
-          if(ir(idim)>=m%box_ckey_max(idim,ilevel+1))ir(idim)=m%box_ckey_min(idim,ilevel+1)
+          if(il(idim)< m%box_ckey_min(idim,ilevel+1))il(idim)=il(idim)-m%box_ckey_min(idim,ilevel+1)+m%box_ckey_max(idim,ilevel+1)
+          if(ir(idim)< m%box_ckey_min(idim,ilevel+1))ir(idim)=ir(idim)-m%box_ckey_min(idim,ilevel+1)+m%box_ckey_max(idim,ilevel+1)
+          if(il(idim)>=m%box_ckey_max(idim,ilevel+1))il(idim)=il(idim)+m%box_ckey_min(idim,ilevel+1)-m%box_ckey_max(idim,ilevel+1)
+          if(ir(idim)>=m%box_ckey_max(idim,ilevel+1))ir(idim)=ir(idim)+m%box_ckey_min(idim,ilevel+1)-m%box_ckey_max(idim,ilevel+1)
        endif
     enddo
 

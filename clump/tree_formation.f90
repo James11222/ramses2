@@ -107,9 +107,13 @@ subroutine tree_formation(r,g,m,p,c)
      !-------------------------------------
      ! Add here all tree formation criteria
      !-------------------------------------
-     if(c%ind_halo(j).NE.j+c%npeak_cum(g%myid-1))ok=.false.
+     if(c%saddle_threshold>0)then
+        if(c%ind_halo(j).NE.j+c%npeak_cum(g%myid-1))ok=.false.
+        if(c%halo_mass(j)<=10d0*c%mass_threshold)ok=.false.
+     else
+        if(c%clump_mass(j)<=10d0*c%mass_threshold)ok=.false.
+     endif
      if(c%relevance(j)<=c%relevance_threshold)ok=.false.
-     if(c%halo_mass(j)<=10d0*c%mass_threshold)ok=.false.
      if(c%npart(j)==0)ok=.false.
      if(c%ntree(j)>0)ok=.false.
      if(c%particle_mass(j)>0)then
@@ -195,7 +199,7 @@ subroutine tree_formation(r,g,m,p,c)
   end do
   p%npart_tot=p%npart_tot+ntree_cum(g%ncpu)
 
-  if(g%myid==1)write(*,*)'Found',int(ntree_cum(g%ncpu),kind=4),' new merger tree particles for a total of',int(p%npart_tot,kind=4)
+  if(g%myid==1)write(*,'(" Found",I12,"  new merger tree particles for a total of ",I0)')int(ntree_cum(g%ncpu),kind=4),int(p%npart_tot,kind=4)
 
 #endif
 

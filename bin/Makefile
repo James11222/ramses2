@@ -4,6 +4,7 @@
 # Compilation time parameters
 COMPILER = GNU
 CUDA_ARCH = sm_80
+NSUBGRID = 1
 NDIM = 3
 MPI = 0
 HYDRO = 1
@@ -120,6 +121,9 @@ ifneq ($(NVECTOR),32)
 endif
 ifneq ($(NPRE),8)
    DEFINES += -DNPRE=$(NPRE)
+endif
+ifneq ($(NSUBGRID),1)
+   DEFINES += -DNSUBGRID=$(NSUBGRID)
 endif
 ifneq ($(NHILBERT),1)
    DEFINES += -DNHILBERT=$(NHILBERT)
@@ -310,7 +314,7 @@ ifeq ($(COMPILER),NVHPC)
    MODOBJ += cub_module_radix_sort_c.o cub_module_radix_sort_f.o \
       cub_inclusive_scan_c.o cub_inclusive_scan_f.o gpu_utils.o gpu_hydro.o \
       gpu_cooling.o gpu_star.o gpu_feedback.o gpu_rho.o gpu_mg.o gpu_turb.o gpu_refine.o gpu_flag.o gpu_runner.o \
-      gpu_clump.o gpu_part.o gpu_manager.o
+      gpu_clump.o gpu_sink.o gpu_part.o gpu_manager.o
 endif
 ifeq ($(COMPILER),METAL)
    MODOBJ := metal_interface.o metal_bridge.o $(MODOBJ) metal_runner.o

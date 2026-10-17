@@ -10,6 +10,9 @@ recursive subroutine r_output_clump(pst,input_array,input_size,output_array,outp
   use amr_parameters, only: flen
   use ramses_commons, only: pst_t
   use mdl_parameters
+#ifdef _CUDA
+  use clump_device, only: gpu_clump_to_host
+#endif
   implicit none
   type(pst_t)::pst
   integer,VALUE::input_size
@@ -26,6 +29,10 @@ recursive subroutine r_output_clump(pst,input_array,input_size,output_array,outp
      call mdl_get_reply(pst%s%mdl,rID,output_size)
   else
      filename=transfer(input_array,filename)
+#ifdef _CUDA
+     ! Copy the GPU clump finder results to the host
+     call gpu_clump_to_host(pst%s)
+#endif
      ! Write clump properties
      if(pst%s%r%output_clump)then
         call output_clump_properties(pst%s,filename)
@@ -77,12 +84,18 @@ subroutine output_clump_properties(s,filename)
   integer(kind=8),dimension(s%r%levelmin:s%r%nlevelmax)::nskip
   real(kind=8)::pi,grav,rad,mass,r200c,rmax,concentration,purity
   real(kind=8),dimension(1:nbin)::mbin
+  logical::part_clump,ok_profile
 
   associate(r=>s%r,g=>s%g,m=>s%m,c=>s%c)
 
   pi=ACOS(-1d0)
   grav=1d0
   if(s%r%cosmo)grav=3d0/8d0/pi*s%g%omega_m*s%g%aexp
+
+  ! The particle count criterion only applies to particle-based clumps
+  part_clump=(r%rho_type_clump==1.or.r%rho_type_clump==2)
+  ! Mass profiles are only computed for dark matter clumps with halo merging
+  ok_profile=(c%saddle_threshold>0.and.r%part.and.r%rho_type_clump==1)
 
   ! Write clump file
   fileloc=TRIM(filename)//'clump.'
@@ -92,25 +105,38 @@ subroutine output_clump_properties(s,filename)
   do j=1,c%npeak
      if (    c%relevance(j) > c%relevance_threshold.AND. &
           & c%clump_mass(j) > c%mass_threshold.AND. &
-          &      c%npart(j) > 0)then
+          & (c%npart(j) > 0 .or. .not. part_clump))then
 
-        ! Get cumulative mass profile
-        mbin=c%mass_bin(j,1:nbin)
-        ! Get clump tidal radius
-        rad=c%clump_rad(j)
-        ! Get clump particle mass
-        mass=c%mass_bin(j,nbin)
-        ! Comnpute r200, rmax and concentration
-        call halo_mass_def(s,mbin,rad,r200c,rmax,concentration)
-        ! Compute clump purity
-        purity=c%npart(j)*g%mp_min/mass
+        if(ok_profile)then
+           ! Get cumulative mass profile
+           mbin=c%mass_bin(j,1:nbin)
+           ! Get clump tidal radius
+           rad=c%clump_rad(j)
+           ! Get clump particle mass
+           mass=c%mass_bin(j,nbin)
+           ! Comnpute r200, rmax and concentration
+           call halo_mass_def(s,mbin,rad,r200c,rmax,concentration)
+           ! Compute clump purity
+           purity=c%npart(j)*g%mp_min/mass
+        else
+           ! No mass profile: use the patch mass and skip the purity cut
+           mass=c%clump_mass(j)
+           r200c=0d0; rmax=0d0; concentration=0d0
+           purity=huge(purity)
+        endif
+        ! Without halo merging, each clump is its own halo
+        if(c%saddle_threshold>0)then
+           hid=c%ind_halo(j)
+        else
+           hid=c%ind_final(j)
+        endif
 
         ! Output clump properties to file
         if(purity>c%purity_threshold)then
            write(ilun,'(I10,4(1X,I10),15(1X,1PE18.9E2))')&
                  c%ind_final(j)&
                 ,c%new_peak(j)&
-                ,c%ind_halo(j)&
+                ,hid&
                 ,c%n_cells(j)&
                 ,c%npart(j)&
                 ,c%min_dens(j)&

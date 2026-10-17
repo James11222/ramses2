@@ -16,7 +16,8 @@ verbose=.false.
 &AMR_PARAMS
 levelmin=5
 levelmax=14 ! ~ 0.24 AU
-ngridmax=50000
+ngridmax=2000000
+ncachemax=1000000
 nexpand=30*2
 boxlen=0.191405298315250E-01 ! ~ 4000 AU
 /
@@ -55,6 +56,6 @@ eos_T2=4.29
 
 &REFINE_PARAMS
 jeans_refine=30*8.
-interpol_var=0
-interpol_type=1
+interpol_var=1
+interpol_type=0
 /

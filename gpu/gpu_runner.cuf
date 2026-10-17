@@ -11,7 +11,7 @@ module gpu_runner
   !> Various parameters on the device
   logical, device, dimension(1:3) :: periodic
   real(kind=8), device, dimension(1:3) :: box_size
-  real(kind=8), device, dimension(1:3) :: constant_gravity
+  real(kind=dp), device, dimension(1:3) :: constant_gravity
   integer(kind=4), device, allocatable, dimension(:) :: ckey_max
   integer(kind=8), device, allocatable, dimension(:) :: key_off
   integer(kind=4), device, allocatable, dimension(:,:) :: box_ckey_min, box_ckey_max
@@ -30,6 +30,10 @@ module gpu_runner
   !> Arrays to hold face-centred B (MHD) on the device
   real(kind=dp), device, allocatable, dimension(:,:,:) :: bold, bnew
 
+  !> Scratch arrays for the split non-ideal MHD substeps
+  real(kind=dp), device, allocatable, dimension(:,:,:) :: b_roll2, b_my0, b_y0, b_cf, eta_nimhd
+  real(kind=dp), device, allocatable, dimension(:,:) :: e_acc, e_acc0
+
   !> Arrays to hold Turbulent acceleration fields on the device
   real(kind=8), device, allocatable, dimension(:,:,:,:) :: afield_last_d, afield_next_d, afield_now_d
   real(kind=dp), device, allocatable, dimension(:,:,:) :: fturb
@@ -42,16 +46,18 @@ module gpu_runner
   real(kind=dp),   device, allocatable, dimension(:,:) :: xp, vp
   real(kind=dp),   device, allocatable, dimension(:)   :: mp, phip
   integer(kind=4), device, allocatable, dimension(:)   :: levelp
-  integer(kind=4), device, allocatable, dimension(:)   :: sortp
+  integer(kind=4), device, allocatable, target, dimension(:)   :: sortp
   integer(i8b),    device, allocatable, dimension(:)   :: idp
+  integer(kind=4), device, allocatable, dimension(:)   :: pid, hid
 
   !> Arrays to hold the star particle variables on the device
   real(kind=dp),   device, allocatable, dimension(:,:) :: star_xp, star_vp
   real(kind=dp),   device, allocatable, dimension(:)   :: star_mp, star_phip
   real(kind=dp),   device, allocatable, dimension(:)   :: star_tp, star_zp
   integer(kind=4), device, allocatable, dimension(:)   :: star_levelp
-  integer(kind=4), device, allocatable, dimension(:)   :: star_sortp
+  integer(kind=4), device, allocatable, target, dimension(:)   :: star_sortp
   integer(i8b),    device, allocatable, dimension(:)   :: star_idp
+  integer(kind=4), device, allocatable, dimension(:)   :: star_pid, star_hid
 
   !> Arrays to hold the star particle variables on the device
   real(kind=dp),   device, allocatable, dimension(:,:) :: sink_xp, sink_vp
@@ -59,18 +65,21 @@ module gpu_runner
   real(kind=dp),   device, allocatable, dimension(:)   :: sink_mp, sink_phip
   real(kind=dp),   device, allocatable, dimension(:)   :: sink_tp
   integer(kind=4), device, allocatable, dimension(:)   :: sink_levelp
-  integer(kind=4), device, allocatable, dimension(:)   :: sink_sortp
+  integer(kind=4), device, allocatable, target, dimension(:)   :: sink_sortp
   integer(i8b),    device, allocatable, dimension(:)   :: sink_idp
   integer(kind=4), device, allocatable, dimension(:)   :: sink_pid
+  integer(kind=4), device, allocatable, dimension(:)   :: sink_hid
+  real(kind=dp),   device, allocatable, dimension(:)   :: sink_tm
+  integer(i8b),    device, allocatable, dimension(:)   :: sink_idm
 
   !> xp_swap/isp_swap/idp_swap: gather/scatter scratch and other tasks.
   real(kind=dp),   device, allocatable, dimension(:) :: xp_swap
-  integer(kind=8), device, allocatable, dimension(:) :: idp_swap
-  integer(kind=4), device, allocatable, dimension(:) :: isp_swap
+  integer(kind=8), device, allocatable, target, dimension(:) :: idp_swap
+  integer(kind=4), device, allocatable, target, dimension(:) :: isp_swap
 
   ! CUB workspace
 #if defined(CUB_SORT_PART)
-  integer(kind=8), device, allocatable, dimension(:) :: hkeyp
+  integer(kind=8), device, allocatable, target, dimension(:) :: hkeyp
 #endif
 
   !> Arrays to hold the hash table on the device
@@ -78,8 +87,8 @@ module gpu_runner
   integer(kind=4), device, allocatable, dimension(:) :: hash_val
 
   !> Object to hold the prefix sum data vector and workspace
-  integer(kind=4), device, allocatable, dimension(:) :: swap_local, swap_global
-  integer(kind=4), device, allocatable, dimension(:) :: prefix_sum
+  integer(kind=4), device, allocatable, target, dimension(:) :: swap_local, swap_global
+  integer(kind=4), device, allocatable, target, dimension(:) :: prefix_sum
   integer(kind=4), device, allocatable, dimension(:) :: partial_sums_0, partial_sums_1, partial_sums_2
   !> Real(dp) partial-sum workspace for the dark matter CIC small-stencil deposit
   real(kind=dp), device, allocatable, dimension(:) :: partial_sums_dp_0, partial_sums_dp_1, partial_sums_dp_2
@@ -174,16 +183,12 @@ contains
   end subroutine gpu_cmpdt
 
   !> @brief
-  !> Two-step atomics-free variant of gpu_cmpdt. Step 1 (cmpdt_kernel_2)
-  !> writes 5 per-block partials into slices of the pre-allocated
-  !> prefix_sum buffer (reinterpreted as real(kind=8)). Step 2 is a
-  !> hierarchical reduce mirroring gpu_scan: cmpdt_reduce_kernel is
-  !> relaunched up to 3 times, each block doing one
-  !> block_reduce_sum4_min1 (recursive __shfl_down warp tree). No new
-  !> allocations, no atomics.
+  !> Two-step atomics-free variant of gpu_cmpdt.
   !>
-  !> Note: this routine clobbers prefix_sum; every existing scan user
-  !> writes prefix_sum before reading it, so no restore is needed.
+  !> @detail
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
   subroutine gpu_cmpdt_2(sim, ilevel, mass, ekin, eint, emag, dt)
     use, intrinsic :: iso_c_binding, only: c_f_pointer
     use nvtx
@@ -196,22 +201,19 @@ contains
     integer(kind=4) :: head_idx, num_octs
     integer :: num_threads, num_blocks
     integer :: block_size_r, n0, g0, g1
-    integer(kind=8) :: cap_doubles, need_doubles, base_B, base_C
+    integer(kind=8) :: cap_slots, need_slots, base_B, base_C
+    integer(kind=8) :: bytes_per_slot
     real(kind=dp) :: gamma, smallr, smallc2, dx, courant_factor
     real(kind=8), device, dimension(5) :: d_data ! mass, ekin, eint, emag, dt
     real(kind=8), dimension(5) :: h_data
 
-    ! prefix_sum reinterpreted as a contiguous real(kind=8) scratch buffer
-    real(kind=8), device, pointer :: scratch(:)
-    real(kind=8), device, pointer :: A_mass(:), A_ekin(:), A_eint(:), A_emag(:), A_dt(:)
-    real(kind=8), device, pointer :: B_mass(:), B_ekin(:), B_eint(:), B_emag(:), B_dt(:)
-    real(kind=8), device, pointer :: C_mass(:), C_ekin(:), C_eint(:), C_emag(:), C_dt(:)
-    real(kind=8), device, pointer :: dummy(:)
-
-    ! Split-timer diagnostics (host wall-clock, guarded by cudaDeviceSynchronize)
-    integer(kind=8) :: t0, t1, t2, t3, t4, tick_rate
-    real(kind=8)    :: dt_step1, dt_reduce, dt_d2h, dt_total
-    integer         :: istat
+    ! prefix_sum reinterpreted as a contiguous real(kind=dp) scratch buffer
+    real(kind=dp), device, pointer :: scratch(:)
+    real(kind=dp), device, pointer :: A_mass(:), A_ekin(:), A_eint(:), A_emag(:), A_dt(:)
+    real(kind=dp), device, pointer :: B_mass(:), B_ekin(:), B_eint(:), B_emag(:), B_dt(:)
+    real(kind=dp), device, pointer :: C_mass(:), C_ekin(:), C_eint(:), C_emag(:), C_dt(:)
+    real(kind=dp), device, pointer :: dummy(:)
+    real(kind=8), device, pointer :: d_dummy(:)
 
     courant_factor = sim%r%courant_factor
     gamma = sim%r%gamma
@@ -219,41 +221,48 @@ contains
     smallc2 = sim%r%smallc**2
     dx = sim%r%boxlen/2**ilevel
     dt = courant_factor*dx/sim%r%smallc
+    mass = 0d0; ekin = 0d0; eint = 0d0; emag = 0d0
 
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
+
+    if (num_octs == 0) return
+
     num_threads = 256
     num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
 
-    ! -- Alias prefix_sum as a real(kind=8) scratch buffer --
+    ! Alias prefix_sum as a real(kind=dp) scratch buffer
     if (.not. allocated(prefix_sum)) then
        write(*,*) 'gpu_cmpdt_2: prefix_sum not allocated'; stop
     end if
-    cap_doubles = (int(size(prefix_sum), kind=8) * 4_8) / 8_8
-    call c_f_pointer(c_devloc(prefix_sum(1)), scratch, [cap_doubles])
+
+    ! Matches sizeof(dp) for both NPRE=4 and NPRE=8
+    bytes_per_slot = int(storage_size(0.0_dp), kind=8) / 8_8
+    cap_slots = (int(size(prefix_sum), kind=8) * 4_8) / bytes_per_slot
+    call c_f_pointer(c_devloc(prefix_sum(1)), scratch, [cap_slots])
     call c_f_pointer(c_devloc(prefix_sum(1)), dummy,   [1_8])
 
-    ! -- Sizing of the three-level reduction tree --
+    ! Sizing of the three-level reduction tree
     block_size_r = 256
     n0 = num_blocks
     g0 = (n0 + block_size_r - 1) / block_size_r
     g1 = (g0 + block_size_r - 1) / block_size_r
 
-    need_doubles = 5_8 * int(n0, kind=8)
-    if (n0 > block_size_r)                need_doubles = need_doubles + 5_8 * int(g0, kind=8)
-    if (g0 > block_size_r)                need_doubles = need_doubles + 5_8 * int(g1, kind=8)
-    if (need_doubles > cap_doubles) then
-       write(*,*) 'gpu_cmpdt_2: prefix_sum too small for scratch', need_doubles, cap_doubles; stop
+    need_slots = 5_8 * int(n0, kind=8)
+    if (n0 > block_size_r) need_slots = need_slots + 5_8 * int(g0, kind=8)
+    if (g0 > block_size_r) need_slots = need_slots + 5_8 * int(g1, kind=8)
+    if (need_slots > cap_slots) then
+       write(*,*) 'gpu_cmpdt_2: prefix_sum too small for scratch', need_slots, cap_slots; stop
     end if
 
-    ! -- Region A (step-1 output): 5 x n0 doubles --
+    ! Region A (step-1 output): 5 x n0 doubles
     A_mass => scratch(0_8*n0 + 1_8 : 1_8*n0)
     A_ekin => scratch(1_8*n0 + 1_8 : 2_8*n0)
     A_eint => scratch(2_8*n0 + 1_8 : 3_8*n0)
     A_emag => scratch(3_8*n0 + 1_8 : 4_8*n0)
     A_dt   => scratch(4_8*n0 + 1_8 : 5_8*n0)
 
-    ! -- Region B (pass-1 output): 5 x g0 doubles, right after A --
+    ! Region B (pass-1 output): 5 x g0 doubles, right after A
     base_B = 5_8 * int(n0, kind=8)
     B_mass => scratch(base_B + 0_8*g0 + 1_8 : base_B + 1_8*g0)
     B_ekin => scratch(base_B + 1_8*g0 + 1_8 : base_B + 2_8*g0)
@@ -261,7 +270,7 @@ contains
     B_emag => scratch(base_B + 3_8*g0 + 1_8 : base_B + 4_8*g0)
     B_dt   => scratch(base_B + 4_8*g0 + 1_8 : base_B + 5_8*g0)
 
-    ! -- Region C (pass-2 output): 5 x g1 doubles, right after B --
+    ! Region C (pass-2 output): 5 x g1 doubles, right after B
     base_C = base_B + 5_8 * int(g0, kind=8)
     C_mass => scratch(base_C + 0_8*g1 + 1_8 : base_C + 1_8*g1)
     C_ekin => scratch(base_C + 1_8*g1 + 1_8 : base_C + 2_8*g1)
@@ -271,11 +280,7 @@ contains
 
     call nvtxStartRange("GPU cmpdt_2", color=0)!green
 
-    ! Baseline sync so t0 measures only the work that follows.
-    istat = cudaDeviceSynchronize()
-    call system_clock(t0, tick_rate)
-
-    ! -- Step 1: per-cell work + fused block reduce; write A --
+    ! Step 1: per-cell work + fused block reduce; write A
     call cmpdt_kernel_2<<<num_blocks, num_threads>>>(grid, uold, bold, f, &
         & constant_gravity, head_idx, num_octs, &
         & A_mass, A_ekin, A_eint, A_emag, A_dt, &
@@ -285,10 +290,7 @@ contains
 #endif
         & )
 
-    istat = cudaDeviceSynchronize()
-    call system_clock(t1)
-
-    ! -- Step 2: hierarchical reduce, up to three passes (mirrors gpu_scan) --
+    ! Step 2: hierarchical reduce, up to three passes (mirrors gpu_scan)
     if (n0 <= block_size_r) then
        ! One pass: A -> data_out
        call cmpdt_reduce_kernel<<<1, block_size_r>>>( &
@@ -298,7 +300,7 @@ contains
        ! Two passes: A -> B (g0 outputs), then B -> data_out
        call cmpdt_reduce_kernel<<<g0, block_size_r>>>( &
             A_mass, A_ekin, A_eint, A_emag, A_dt, n0, &
-            B_mass, B_ekin, B_eint, B_emag, B_dt, dummy, .false.)
+            B_mass, B_ekin, B_eint, B_emag, B_dt, d_dummy, .false.)
        call cmpdt_reduce_kernel<<<1, block_size_r>>>( &
             B_mass, B_ekin, B_eint, B_emag, B_dt, g0, &
             dummy, dummy, dummy, dummy, dummy, d_data, .true.)
@@ -306,10 +308,10 @@ contains
        ! Three passes: A -> B, B -> C (g1 outputs), C -> data_out
        call cmpdt_reduce_kernel<<<g0, block_size_r>>>( &
             A_mass, A_ekin, A_eint, A_emag, A_dt, n0, &
-            B_mass, B_ekin, B_eint, B_emag, B_dt, dummy, .false.)
+            B_mass, B_ekin, B_eint, B_emag, B_dt, d_dummy, .false.)
        call cmpdt_reduce_kernel<<<g1, block_size_r>>>( &
             B_mass, B_ekin, B_eint, B_emag, B_dt, g0, &
-            C_mass, C_ekin, C_eint, C_emag, C_dt, dummy, .false.)
+            C_mass, C_ekin, C_eint, C_emag, C_dt, d_dummy, .false.)
        call cmpdt_reduce_kernel<<<1, block_size_r>>>( &
             C_mass, C_ekin, C_eint, C_emag, C_dt, g1, &
             dummy, dummy, dummy, dummy, dummy, d_data, .true.)
@@ -317,32 +319,16 @@ contains
        write(*,*) 'gpu_cmpdt_2: too many partials for 3-level reducer', n0
        stop
     end if
-
-    istat = cudaDeviceSynchronize()
-    call system_clock(t2)
-
     call nvtxEndRange()
 
-    ! move results to host  (implicit sync)
+    ! Move results to host  (implicit sync)
     h_data(:) = d_data(:)
-    call system_clock(t3)
 
     mass = h_data(1)
     ekin = h_data(2)
     eint = h_data(3)
     emag = h_data(4)
-    dt = h_data(5)
-
-    dt_step1  = real(t1 - t0, kind=8) / real(tick_rate, kind=8)
-    dt_reduce = real(t2 - t1, kind=8) / real(tick_rate, kind=8)
-    dt_d2h    = real(t3 - t2, kind=8) / real(tick_rate, kind=8)
-    dt_total  = real(t3 - t0, kind=8) / real(tick_rate, kind=8)
-    write(*,'(A,I3,4(A,ES10.3))') &
-         ' [gpu_cmpdt_2] ilev=', ilevel, &
-         '  step1=', dt_step1, &
-         '  reduce=', dt_reduce, &
-         '  d2h=', dt_d2h, &
-         '  total=', dt_total
+    dt = min(h_data(5), dt)
 
     call GPU_Error_Check(__FILE__, __LINE__)
 
@@ -652,10 +638,14 @@ contains
     switch_llf_pmin_d = switch_llf_pmin
     induction = sim%r%induction
     etamag = sim%r%etamag
+    if (sim%r%nimhd_solver /= 'unsplit') etamag = 0.0_dp
 
     head_idx = (sim%m%head(ilevel) - 1) / nsubgridtondim + 1
     num_subgrids = sim%m%noct(ilevel) / nsubgridtondim
     num_blocks = num_subgrids
+
+    ! Ghost octs must see the current coarse level variables
+    call gpu_refresh_cache(sim, ilevel)
 
     call nvtxStartRange("GPU Godunov", color=0)!green
 #ifdef PAPER
@@ -683,7 +673,12 @@ contains
          & gamma, smallr, smallc2, dt, dx, slope, slope_mag, riemann, riemann2d, &
          & switch_llf_dmin, switch_llf_pmin, induction, etamag, constant_gravity)
 #else
+#if defined(NPRE) && NPRE == 4
+    if(nsubgrid == 2)threads_per_block = 128
     if(nsubgrid == 4)threads_per_block = 512
+#else
+    if(nsubgrid == 4)threads_per_block = 640
+#endif
     shmem_bytes = storage_size(smem_probe) / 8
     istat = cudaFuncSetAttribute(hydro_integrator_kernel, &
          & cudaFuncAttributeMaxDynamicSharedMemorySize, shmem_bytes)
@@ -703,6 +698,456 @@ contains
     call nvtxEndRange()
 
   end subroutine gpu_godunov
+
+  !> @brief
+  !> Refresh the ghost octs of level ilevel in cache memory from their parent cells.
+  !>
+  !> @detail
+  !> Ghost octs are created in gpu_refine, but the coarse level variables they are
+  !> computed from can change before they are used. Call before reading them.
+  !>
+  subroutine gpu_refresh_cache(sim, ilevel)
+    use nvtx
+    use refine_device, only: refresh_cache_octs_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs
+    integer :: num_threads, num_blocks
+
+    ! Ghost octs exist only above levelmin
+    if (ilevel <= sim%r%levelmin) return
+
+    head_idx = sim%m%ngridmax + sim%m%head_cache(ilevel)
+    num_octs = sim%m%noct_cache(ilevel)
+    if (num_octs <= 0) return
+
+    num_threads = 128
+    num_blocks = (num_octs + num_threads - 1) / num_threads
+    call nvtxStartRange("GPU refresh cache", color=2)!yellow
+    call refresh_cache_octs_kernel<<<num_blocks, num_threads>>>(grid, uold, bold, f, father, &
+         & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
+         & head_idx, num_octs, sim%r%interpol_var, sim%r%interpol_type, real(sim%r%smallr,kind=dp))
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+  end subroutine gpu_refresh_cache
+
+  !> @brief
+  !> Limit the time step of a level with refined cells by the explicit diffusion time step
+  !> of the split non-ideal MHD solver at the edges between leaf and refined cells
+  !>
+  !> @detail
+  !> The finer levels add their non-ideal EMF on these edges once per coarse step, with
+  !> ghost cells frozen over it, which is only stable within half the explicit time step.
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level
+  !> @param[inout] dt : The time step to limit
+  !>
+  subroutine gpu_nimhd_dt(sim, ilevel, dt)
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+    real(kind=8), intent(inout) :: dt
+#ifdef MHD
+    if (sim%r%nimhd_solver == 'unsplit' .or. sim%r%nimhd_composite .or. ilevel >= sim%r%nlevelmax) return
+    if (sim%m%noct(ilevel) <= 0) return
+    dt = min(dt, 0.5d0*nimhd_dt_parab(sim, ilevel, .true.))
+#endif
+  end subroutine gpu_nimhd_dt
+
+#ifdef MHD
+  !> Coefficients of the split non-ideal MHD solver on the level and ghost octs, and the
+  !> explicit diffusion time step over the edges of the level, or with coarse_fine over the
+  !> edges between leaf and refined cells only.
+  function nimhd_dt_parab(sim, ilevel, coarse_fine) result(dt_parab)
+    use hydro_device, only: nimhd_coeff_kernel, nimhd_dt_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+    logical, intent(in) :: coarse_fine
+    real(kind=8) :: dt_parab
+    integer(kind=4) :: head_oct, num_octs, head_sg, num_sg, head_cache, num_cache
+    integer :: threads_per_block, num_threads, num_blocks
+    real(dp) :: dx
+    real(kind=8), device, dimension(1) :: d_dtp
+    real(kind=8), dimension(1) :: h_dtp
+
+    head_oct = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    head_sg = (head_oct - 1) / nsubgridtondim + 1
+    num_sg = num_octs / nsubgridtondim
+    head_cache = sim%m%ngridmax + sim%m%head_cache(ilevel)
+    num_cache = sim%m%noct_cache(ilevel)
+    dx = sim%r%boxlen/2**ilevel
+    if(nsubgrid == 1)threads_per_block = 64
+    if(nsubgrid == 2)threads_per_block = 256
+
+    num_threads = 256
+    num_blocks = (num_octs*twotondim + num_threads - 1) / num_threads
+    call nimhd_coeff_kernel<<<num_blocks, num_threads>>>(uold, bold, eta_nimhd, head_oct, num_octs, &
+         & real(sim%r%gamma,dp), real(sim%r%smallr,dp), real(sim%r%etamag,dp), real(sim%r%eta_ad,dp))
+    if (num_cache > 0) then
+       num_blocks = (num_cache*twotondim + num_threads - 1) / num_threads
+       call nimhd_coeff_kernel<<<num_blocks, num_threads>>>(uold, bold, eta_nimhd, head_cache, num_cache, &
+            & real(sim%r%gamma,dp), real(sim%r%smallr,dp), real(sim%r%etamag,dp), real(sim%r%eta_ad,dp))
+    endif
+    d_dtp(1) = huge(0.0d0)
+    call nimhd_dt_kernel<<<num_sg, threads_per_block>>>(grid, eta_nimhd, bold, nbor, head_sg, num_sg, d_dtp, &
+         & dx, real(sim%r%nimhd_courant,dp), coarse_fine)
+    h_dtp = d_dtp
+    dt_parab = h_dtp(1)
+  end function nimhd_dt_parab
+#endif
+
+  !> @brief
+  !> Operator-split non-ideal MHD (Ohmic and ambipolar) update on a GPU
+  !>
+  !> @detail
+  !> Forward-Euler substeps or RKG stages over dtnew(ilevel) after set_uold, or half of it
+  !> before the Godunov step and again after set_uold with nimhd_split='strang'. Before the
+  !> Godunov step the change is also added to unew and bnew.
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !> @param[in] ipass : 1 before the Godunov step, 2 after set_uold
+  !>
+  subroutine gpu_nimhd_fine(sim, ilevel, ipass)
+#ifdef MHD
+    use nvtx
+    use hydro_device, only: nimhd_stage_kernel
+#endif
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel, ipass
+#ifdef MHD
+    integer(kind=4) :: head_oct, num_octs, head_sg, num_sg, head_cache, num_cache
+    integer :: threads_per_block, info, s, j
+    real(kind=8) :: dt_parab, mut1
+    real(kind=8), allocatable, dimension(:) :: mu, nu, mut, gt, q
+    real(dp) :: dt, dx
+    logical :: heat, pre
+
+    if (sim%r%nimhd_composite) then
+       call gpu_nimhd_composite(sim, ilevel)
+       return
+    endif
+
+    head_oct = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    if (num_octs <= 0) return
+
+    if(sim%r%verbose.and.sim%g%myid==1)write(*,'("   Entering gpu_nimhd_fine for level ",I2)')ilevel
+
+    dt = sim%g%dtnew(ilevel)
+    if (sim%r%nimhd_split == 'strang') dt = 0.5_dp*dt
+    pre = (ipass == 1)
+    dx = sim%r%boxlen/2**ilevel
+    heat = .not.(sim%r%isothermal .or. sim%r%induction)
+    head_sg = (head_oct - 1) / nsubgridtondim + 1
+    num_sg = num_octs / nsubgridtondim
+    head_cache = sim%m%ngridmax + sim%m%head_cache(ilevel)
+    num_cache = sim%m%noct_cache(ilevel)
+    if(nsubgrid == 1)threads_per_block = 64
+    if(nsubgrid == 2)threads_per_block = 256
+
+    call nvtxStartRange("GPU non-ideal MHD", color=1)
+
+    dt_parab = nimhd_dt_parab(sim, ilevel, .false.)
+    if (dt_parab >= 0.5d0*huge(0.0d0)) then
+       call nvtxEndRange()
+       return
+    endif
+
+    call nimhd_stage_coefficients(sim, dble(dt)/dt_parab, s, mu, nu, mut, gt, mut1, q)
+
+    ! Y_0 is stashed in bnew after set_uold, and in b_y0 before the Godunov step when
+    ! bnew holds the accumulated finer-level corrections
+    if (pre) then
+       call nimhd_stages(b_y0)
+    else
+       call nimhd_stages(bnew)
+    endif
+
+    deallocate(mu, nu, mut, gt, q)
+
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+  contains
+
+    ! bold and b_roll2 alternate so that Y_s ends in bold. Ghost octs keep Y_0 in y0,
+    ! bold and b_roll2.
+    subroutine nimhd_stages(y0)
+      real(kind=dp), device :: y0(1:twotondim,1:6,*)
+      info = cudaMemcpy(y0(1,1,head_oct), bold(1,1,head_oct), twotondim*6*num_octs)
+      if (num_cache > 0) then
+         info = cudaMemcpy(y0(1,1,head_cache), bold(1,1,head_cache), twotondim*6*num_cache)
+         info = cudaMemcpy(b_roll2(1,1,head_cache), bold(1,1,head_cache), twotondim*6*num_cache)
+      endif
+      if (mod(s,2) == 1) then
+         call nimhd_stage(y0, y0, bold, y0, 1)
+      else
+         call nimhd_stage(y0, y0, b_roll2, y0, 1)
+      endif
+      do j = 2, s
+         if (mod(s-j,2) == 0) then
+            if (j == 2) then
+               call nimhd_stage(b_roll2, y0, bold, y0, j)
+            else
+               call nimhd_stage(b_roll2, bold, bold, y0, j)
+            endif
+         else
+            if (j == 2) then
+               call nimhd_stage(bold, y0, b_roll2, y0, j)
+            else
+               call nimhd_stage(bold, b_roll2, b_roll2, y0, j)
+            endif
+         endif
+      end do
+    end subroutine nimhd_stages
+
+    subroutine nimhd_stage(yjm1, yjm2, yj, y0, jstage)
+      real(kind=dp), device :: yjm1(1:twotondim,1:6,*), yjm2(1:twotondim,1:6,*), yj(1:twotondim,1:6,*)
+      real(kind=dp), device :: y0(1:twotondim,1:6,*)
+      integer, intent(in) :: jstage
+      call nimhd_stage_kernel<<<num_sg, threads_per_block>>>(grid, eta_nimhd, yjm1, yjm2, y0, b_my0, yj, &
+           & uold, e_acc, e_acc0, unew, bnew, heat, jstage == 1, jstage == s, pre, .false., father, nbor, &
+           & head_sg, num_sg, sim%m%ngridmax, ilevel, sim%r%levelmin, sim%r%nlevelmax, dt, dx, &
+           & real(mu(jstage),dp), real(nu(jstage),dp), real(mut(jstage),dp), &
+           & real(gt(jstage),dp), real(mut1,dp), real(q(jstage-1),dp), real(q(jstage-1),dp))
+    end subroutine nimhd_stage
+#endif
+  end subroutine gpu_nimhd_fine
+
+#ifdef MHD
+  !> Number of substeps s and stage coefficients of the split non-ideal MHD solver for
+  !> tau=dt/dt_parab, with the weights q of the stage operators in Y_s - Y_0 = sum_k q_k M(Y_k).
+  !> The sts stages are the second-order Runge-Kutta-Gegenbauer scheme of Mattia et al. (2026),
+  !> arXiv:2606.13398, with Gegenbauer parameter alpha=nimhd_alpha; alpha=0.5 gives the
+  !> Runge-Kutta-Legendre scheme of Meyer, Balsara & Aslam (2014) JCP, 257, 594.
+  subroutine nimhd_stage_coefficients(sim, tau, s, mu, nu, mut, gt, mut1, q)
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(in) :: sim
+    real(kind=8), intent(in) :: tau
+    integer, intent(out) :: s
+    real(kind=8), allocatable, dimension(:), intent(out) :: mu, nu, mut, gt, q
+    real(kind=8), intent(out) :: mut1
+    integer, parameter :: smax = 100000
+    real(kind=8) :: sreal, w1, alpha
+    real(kind=8), allocatable, dimension(:) :: bcoef, lambda
+    logical :: sts
+    integer :: j
+
+    sts = (sim%r%nimhd_solver == 'sts')
+    alpha = sim%r%nimhd_alpha
+    if (sts) then
+       sreal = -alpha + sqrt((alpha + 1d0)**2 + tau*(3d0 + 2d0*alpha))
+    else
+       sreal = tau
+    endif
+    if (.not. sreal <= dble(smax)) then
+       write(*,*)'gpu_nimhd_fine: dt/dt_parab=',tau,' needs more than ',smax,' substeps'
+       error stop
+    endif
+    if (sts) then
+       s = max(3, ceiling(sreal))
+    else
+       s = max(1, ceiling(sreal))
+    endif
+    if(sim%r%verbose.and.sim%g%myid==1)write(*,'("   Non-ideal MHD: dt/dt_parab=",ES10.3," -> ",I0," substeps")')tau,s
+
+    allocate(bcoef(0:s), mu(0:s), nu(0:s), mut(0:s), gt(0:s), q(0:s-1), lambda(0:s))
+    mu = 0d0
+    nu = 0d0
+    mut = 0d0
+    gt = 0d0
+    if (sts) then
+       w1 = (3d0 + 2d0*alpha)/((dble(s) + 2d0*alpha + 1d0)*(dble(s) - 1d0))
+       mut1 = w1/3d0
+       bcoef(0) = 1d0/3d0
+       bcoef(1) = 1d0/3d0
+       do j = 2, s
+          bcoef(j) = (2d0*alpha + 1d0)/(dble(j)*(dble(j) + 2d0*alpha)) * &
+               & (dble(j) + 2d0*alpha + 1d0)*dble(j-1)/(3d0 + 2d0*alpha)
+          mu(j) = 2d0*(alpha + dble(j) - 1d0)/(dble(j) + 2d0*alpha - 1d0) * bcoef(j)/bcoef(j-1)
+          nu(j) = -dble(j-1)/(dble(j) + 2d0*alpha - 1d0) * bcoef(j)/bcoef(j-2)
+          mut(j) = mu(j)*w1
+          gt(j) = -(1d0 - bcoef(j-1))*mut(j)
+       end do
+    else
+       mut1 = 1d0/dble(s)
+       mu(2:s) = 1d0
+       mut(2:s) = mut1
+    endif
+
+    q = 0d0
+    lambda = 0d0
+    lambda(s) = 1d0
+    do j = s, 2, -1
+       q(j-1) = q(j-1) + lambda(j)*mut(j)
+       q(0) = q(0) + lambda(j)*gt(j)
+       lambda(j-1) = lambda(j-1) + lambda(j)*mu(j)
+       lambda(j-2) = lambda(j-2) + lambda(j)*nu(j)
+    end do
+    q(0) = q(0) + lambda(1)*mut1
+
+    deallocate(bcoef, lambda)
+  end subroutine nimhd_stage_coefficients
+
+  !> @brief
+  !> Operator-split non-ideal MHD update of all levels together, when they share the time step
+  !>
+  !> @detail
+  !> At every stage the ghost octs are prolongated, the coarser level takes the EMF of the finer
+  !> level on the edges of refined cells, and the face B of refined cells is restricted. uold and
+  !> bold are updated in place; unew and bnew are scratch.
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The level whose dtnew is the common time step
+  !>
+  subroutine gpu_nimhd_composite(sim, ilevel)
+    use nvtx
+    use hydro_device, only: nimhd_stage_kernel, nimhd_restrict_b_kernel, nimhd_scratch_kernel
+    use refine_device, only: nimhd_ghost_b_kernel
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+    integer(kind=4) :: head_oct, num_octs, head_cache, num_cache
+    integer :: threads_per_block, num_threads, info, s, j, l, lmin, lf
+    real(kind=8) :: dt_parab, mut1
+    real(kind=8), allocatable, dimension(:) :: mu, nu, mut, gt, q
+    real(dp) :: dt
+    logical :: heat
+
+    lmin = sim%r%levelmin
+    lf = lmin
+    do l = lmin + 1, sim%r%nlevelmax
+       if (sim%m%noct(l) > 0) lf = l
+    end do
+    if(sim%r%verbose.and.sim%g%myid==1)write(*,'("   Entering gpu_nimhd_composite for levels ",I2," to ",I2)')lmin,lf
+
+    dt = sim%g%dtnew(ilevel)
+    if (sim%r%nimhd_split == 'strang') dt = 0.5_dp*dt
+    heat = .not.(sim%r%isothermal .or. sim%r%induction)
+    if(nsubgrid == 1)threads_per_block = 64
+    if(nsubgrid == 2)threads_per_block = 256
+    num_threads = 256
+
+    call nvtxStartRange("GPU non-ideal MHD", color=1)
+
+    dt_parab = huge(0.0d0)
+    do l = lmin, lf
+       if (sim%m%noct(l) > 0) dt_parab = min(dt_parab, nimhd_dt_parab(sim, l, .false.))
+    end do
+    if (dt_parab >= 0.5d0*huge(0.0d0)) then
+       call nvtxEndRange()
+       return
+    endif
+    call nimhd_stage_coefficients(sim, dble(dt)/dt_parab, s, mu, nu, mut, gt, mut1, q)
+
+    ! Y_0 in bnew, and the energy fluxes of the finer levels in unew(:,5)
+    do l = lmin, lf
+       head_oct = sim%m%head(l)
+       num_octs = sim%m%noct(l)
+       head_cache = sim%m%ngridmax + sim%m%head_cache(l)
+       num_cache = sim%m%noct_cache(l)
+       if (num_octs <= 0) cycle
+       info = cudaMemcpy(bnew(1,1,head_oct), bold(1,1,head_oct), twotondim*6*num_octs)
+       if (num_cache > 0) info = cudaMemcpy(bnew(1,1,head_cache), bold(1,1,head_cache), twotondim*6*num_cache)
+       call scratch(l, 1)
+    end do
+
+    if (mod(s,2) == 1) then
+       call composite_stage(bnew, bnew, bold, 1)
+    else
+       call composite_stage(bnew, bnew, b_roll2, 1)
+    endif
+    do j = 2, s
+       if (mod(s-j,2) == 0) then
+          if (j == 2) then
+             call composite_stage(b_roll2, bnew, bold, j)
+          else
+             call composite_stage(b_roll2, bold, bold, j)
+          endif
+       else
+          if (j == 2) then
+             call composite_stage(bold, bnew, b_roll2, j)
+          else
+             call composite_stage(bold, b_roll2, b_roll2, j)
+          endif
+       endif
+    end do
+
+    ! Ghost octs of the final field, energy of the finer levels, and restriction
+    call refresh_ghosts(bold)
+    if (heat) then
+       do l = lmin, lf - 1
+          call scratch(l, 3)
+       end do
+    endif
+    do l = lf - 1, lmin, -1
+       call gpu_upload(sim, l)
+    end do
+
+    deallocate(mu, nu, mut, gt, q)
+
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+  contains
+
+    subroutine scratch(lev, mode)
+      integer, intent(in) :: lev, mode
+      if (sim%m%noct(lev) <= 0) return
+      call nimhd_scratch_kernel<<<(sim%m%noct(lev)*twotondim + num_threads - 1)/num_threads, num_threads>>>(uold, &
+           & unew, b_cf, sim%m%head(lev), sim%m%noct(lev), mode)
+    end subroutine scratch
+
+    subroutine refresh_ghosts(b)
+      real(kind=dp), device :: b(1:twotondim,1:6,*)
+      do l = lmin + 1, lf
+         head_cache = sim%m%ngridmax + sim%m%head_cache(l)
+         num_cache = sim%m%noct_cache(l)
+         if (num_cache <= 0) cycle
+         call nimhd_ghost_b_kernel<<<(num_cache + num_threads - 1)/num_threads, num_threads>>>(grid, uold, b, &
+              & father, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, &
+              & periodic, head_cache, num_cache, int(sim%r%interpol_type,4))
+      end do
+    end subroutine refresh_ghosts
+
+    ! Levels from the finest to the coarsest, so that b_cf holds the EMF of the finer level of
+    ! this stage, then restriction of yj from the finest level down
+    subroutine composite_stage(yjm1, yjm2, yj, jstage)
+      real(kind=dp), device :: yjm1(1:twotondim,1:6,*), yjm2(1:twotondim,1:6,*), yj(1:twotondim,1:6,*)
+      integer, intent(in) :: jstage
+      integer(kind=4) :: head_sg, num_sg
+      call refresh_ghosts(yjm1)
+      do l = lmin, lf
+         call scratch(l, 2)
+      end do
+      do l = lf, lmin, -1
+         num_octs = sim%m%noct(l)
+         if (num_octs <= 0) cycle
+         head_sg = (sim%m%head(l) - 1) / nsubgridtondim + 1
+         num_sg = num_octs / nsubgridtondim
+         call nimhd_stage_kernel<<<num_sg, threads_per_block>>>(grid, eta_nimhd, yjm1, yjm2, bnew, b_my0, yj, &
+              & uold, e_acc, e_acc0, unew, b_cf, heat, jstage == 1, jstage == s, .false., .true., father, nbor, &
+              & head_sg, num_sg, sim%m%ngridmax, l, lmin, sim%r%nlevelmax, dt, real(sim%r%boxlen/2**l,dp), &
+              & real(mu(jstage),dp), real(nu(jstage),dp), real(mut(jstage),dp), &
+              & real(gt(jstage),dp), real(mut1,dp), real(q(jstage-1),dp), 1.0_dp)
+      end do
+      do l = lf - 1, lmin, -1
+         num_octs = sim%m%noct(l+1)
+         if (num_octs <= 0) cycle
+         call nimhd_restrict_b_kernel<<<(num_octs + num_threads - 1)/num_threads, num_threads>>>(grid, father, yj, &
+              & sim%m%head(l+1), num_octs)
+      end do
+    end subroutine composite_stage
+  end subroutine gpu_nimhd_composite
+#endif
 
   !> @brief
   !> Restriction of fine cells hydro variable into the coarse level
@@ -1042,7 +1487,8 @@ contains
 
     real(kind=8) :: scale_nH, scale_T2, scale_l, scale_d, scale_t, scale_v
     real(kind=8) :: dx, vol, t_SN, e_SN, dteff, m_SN
-    real(kind=8), device :: msn_loc_d
+    real(kind=dp), device :: msn_loc_d
+    real(kind=dp) :: msn_loc_dp
     integer(kind=4) :: head_idx, num_stars, num_selected
     integer(kind=4), device :: num_selected_d
     integer(kind=4) :: num_threads, num_blocks
@@ -1099,7 +1545,7 @@ contains
        ! We use 48 threads per selected star, so let's choose block size 192 (4 stars per block).
        num_threads = 192
        num_blocks = (num_selected * 48 + num_threads - 1) / num_threads
-       msn_loc_d = 0.0d0
+       msn_loc_d = 0.0_dp
 
        call nvtxStartRange("GPU Mechanical Feedback Kernel", color=3)!blue
        call mechanical_feedback_kernel<<<num_blocks, num_threads>>>(grid, uold, unew, &
@@ -1107,15 +1553,18 @@ contains
             & isp_swap, num_selected, &
             & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, sim%m%ngridmax, &
             & box_ckey_min, box_ckey_max, periodic, &
-            & sim%r%eta_SNII, sim%r%yield_SNII, e_SN, m_SN, sim%r%z_ave, scale_nH, &
-            & sim%r%metal, sim%r%imetal, sim%r%gamma, &
-            & d_skip, &
-            & dx, vol, ilevel, int(sim%r%nstarmax, 8), msn_loc_d, sim%r%smallr)
+            & real(sim%r%eta_SNII,kind=dp), real(sim%r%yield_SNII,kind=dp), real(e_SN,kind=dp), &
+            & real(sim%r%E_SNII/1d51,kind=dp), real(m_SN,kind=dp), real(sim%r%M_SNII,kind=dp), &
+            & real(sim%r%z_ave,kind=dp), real(scale_nH,kind=dp), &
+            & sim%r%metal, sim%r%imetal, real(sim%r%gamma,kind=dp), &
+            & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
+            & real(dx,kind=dp), real(vol,kind=dp), ilevel, int(sim%r%nstarmax, 8), msn_loc_d, real(sim%r%smallr,kind=dp))
        call GPU_Error_Check(__FILE__, __LINE__)
        call nvtxEndRange()
 
        ! Copy back the total mass of ejecta from device to host
-       msn_loc = msn_loc_d
+       msn_loc_dp = msn_loc_d
+       msn_loc = real(msn_loc_dp, kind=8)
 
     endif
 
@@ -1161,7 +1610,8 @@ contains
     integer(kind=4) :: interpol_var, interpol_type
     real(kind=dp) :: smallr_d
 
-    integer(kind=4), device :: ifree_d, ifree_cache_d, new_noct_d
+    integer(kind=4), device :: ifree_d, ifree_cache_d, new_noct_d, cache_overflow_d
+    integer(kind=4) :: cache_overflow
 
     integer(kind=8), pointer, device, dimension(:) :: hkeys_in, hkeys_out
     integer(kind=8) :: noct_max, hkey_size
@@ -1191,7 +1641,10 @@ contains
     ! Create new octs and put them at the end
     head_idx = sim%m%head(ilevel)
     old_ifree = sim%m%ifree
-    num_octs = old_ifree - head_idx
+    num_octs = 0
+    do ilev = ilevel, sim%r%nlevelmax - 1
+       num_octs = num_octs + sim%m%noct(ilev)
+    end do
     threadsX_per_block = 8
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
@@ -1473,6 +1926,7 @@ contains
           num_blocks = (num_subgrids + num_threads - 1) / num_threads
 
           ifree_cache_d = sim%m%ifree_cache
+          cache_overflow_d = 0
 
           ! Loop over 27 neighbors
           do ind = 1, subgridsize
@@ -1499,8 +1953,8 @@ contains
              call make_cache_insert_ghost_octs<<<num_blocks, num_threads>>>(grid, flag1, &
                   & uold, bold, f, phi, phi_old, swap_local, prefix_sum, father, nbor, hash_key, &
                   & hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, &
-                  & periodic, sim%m%ngridmax, ifree_cache_d, ind, head_idx, num_subgrids, &
-                  & interpol_var, interpol_type, smallr_d)
+                  & periodic, sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, ind, &
+                  & head_idx, num_subgrids, interpol_var, interpol_type, smallr_d)
 #else
 #if defined(CUB_SCAN_REFINE)
              call get_total_sum<<<1,1>>>(prefix_sum, head_idx, num_subgrids, new_noct_d)
@@ -1511,12 +1965,13 @@ contains
              call make_cache_octs<<<num_blocks, num_threads>>>(grid, flag1, &
                   & uold, bold, f, phi, phi_old, swap_local, father, nbor, &
                   & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-                  & sim%m%ngridmax, ifree_cache_d, new_noct_d, ind, interpol_var, interpol_type, smallr_d)
+                  & sim%m%ngridmax, sim%m%ncachemax, ifree_cache_d, cache_overflow_d, new_noct_d, ind, &
+                  & interpol_var, interpol_type, smallr_d)
 
              call insert_hash_cache<<<num_blocks, num_threads>>>(grid, hash_key, hash_val, sim%m%hash_size, &
-                  & ckey_max, key_off, sim%m%ngridmax, ifree_cache_d, new_noct_d)
+                  & ckey_max, key_off, sim%m%ngridmax, ifree_cache_d, cache_overflow_d, new_noct_d)
 
-             call advance_ifree_cache<<<1,1>>>(ifree_cache_d, new_noct_d)
+             call advance_ifree_cache<<<1,1>>>(ifree_cache_d, new_noct_d, cache_overflow_d)
 #endif
              call nvtxEndRange()
 
@@ -1524,6 +1979,14 @@ contains
           ! End loop over 27 nbors
 
           sim%m%ifree_cache = ifree_cache_d
+
+          ! Cache overflow is flagged on the device, report it here
+          cache_overflow = cache_overflow_d
+          if (cache_overflow /= 0) then
+             write(*,*)'No more cache memory, increase ncachemax'
+             write(*,*)'Cache octs:', sim%m%ifree_cache-1, ' ncachemax:', sim%m%ncachemax
+             stop
+          endif
 
        end if
 
@@ -1570,14 +2033,16 @@ contains
        call nvtxEndRange()
     endif
 
-    head_idx = sim%m%head(ilevel+1)
-    num_octs = sim%m%noct(ilevel+1)
-    num_threads = 128
-    num_blocks = (num_octs + num_threads - 1) / num_threads
-    if (num_octs > 0) then
-       call nvtxStartRange("GPU init_flag", color=2)!yellow
-       call init_flag_kernel<<<num_blocks, num_threads>>>(flag1, grid, father, head_idx, num_octs)
-       call nvtxEndRange()
+    if (ilevel < sim%r%nlevelmax) then
+       head_idx = sim%m%head(ilevel+1)
+       num_octs = sim%m%noct(ilevel+1)
+       num_threads = 128
+       num_blocks = (num_octs + num_threads - 1) / num_threads
+       if (num_octs > 0) then
+          call nvtxStartRange("GPU init_flag", color=2)!yellow
+          call init_flag_kernel<<<num_blocks, num_threads>>>(flag1, grid, father, head_idx, num_octs)
+          call nvtxEndRange()
+       endif
     endif
 
     nflag_d = 0
@@ -1637,7 +2102,7 @@ contains
   subroutine gpu_user_flag(sim, ilevel, nflag)
     use nvtx
     use hydro_device, only: hydro_flag_kernel
-    use flag_device, only: count_flag1_kernel, poisson_flag_kernel
+    use flag_device, only: count_flag1_kernel, poisson_flag_kernel, mass_flag_kernel, sink_flag_kernel
     use ramses_commons, only: ramses_t
     type(ramses_t), intent(inout) :: sim
     integer, intent(in) :: ilevel
@@ -1651,9 +2116,10 @@ contains
     real(kind=dp) :: err_grad_b2, floor_b2, err_grad_A, floor_A
     real(kind=dp) :: err_grad_B, floor_B, err_grad_C, floor_C
 #endif
-    real(kind=dp) :: m_refine, jeans_refine, mass_sph, dx, factG
+    real(kind=dp) :: m_refine, jeans_refine, mass_sph, dx, factG, d_thres
     integer(kind=8), device :: nflag_d
     integer(kind=8) :: nflag_h
+    integer :: nsink
 
     dx = sim%r%boxlen/2**ilevel
     factG = 1
@@ -1685,7 +2151,8 @@ contains
     threadsY_per_block = 16
     num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
 
-    if(num_octs > 0)then
+    ! Refinement rules for the gravity solver
+    if(sim%r%poisson .and. num_octs > 0)then
        call nvtxStartRange("GPU user_flag", color=2)!yellow
        call poisson_flag_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, nref, uold, bold, &
             & head_idx, num_octs, gamma, smallr, smallc2, mass_sph, m_refine, jeans_refine, factG, dx)
@@ -1698,6 +2165,14 @@ contains
        threadsX_per_block = 8
        threadsY_per_block = 16
        num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+       ! Quasi-Lagrangian refinements without gravity
+       if(m_refine >= 0 .and. (.not. sim%r%poisson) .and. num_octs > 0)then
+          d_thres = m_refine * mass_sph / dx**ndim
+          call nvtxStartRange("GPU user_flag", color=2)!yellow
+          call mass_flag_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, uold, &
+               & head_idx, num_octs, d_thres)
+          call nvtxEndRange()
+       endif
        if(num_octs > 0)then
           call nvtxStartRange("GPU user_flag", color=2)!yellow
           call hydro_flag_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, grid, nbor, uold, bold, head_idx, num_octs, &
@@ -1705,6 +2180,19 @@ contains
                & err_grad_b2, floor_b2, err_grad_A, floor_A, err_grad_B, floor_B, err_grad_C, floor_C, &
 #endif
                & gamma, smallr, smallc2, err_grad_d, err_grad_p, floor_d, floor_p)
+          call nvtxEndRange()
+       endif
+    endif
+
+    ! Refinement rules around sink particles (sinks at level ilevel and finer)
+    if (sim%r%sink .and. sim%r%sink_refine) then
+       nsink = sim%sink%npart - sim%sink%headp(ilevel) + 1
+       if (nsink > 0) then
+          call nvtxStartRange("GPU user_flag", color=2)!yellow
+          call sink_flag_kernel<<<nsink, 128>>>(flag1, sink_xp, int(sim%r%nsinkmax, 8), sim%sink%headp(ilevel), &
+               & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, sim%m%ngridmax, &
+               & box_ckey_min, box_ckey_max, periodic, ilevel, sim%r%sink_b_spline_order, &
+               & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), dx)
           call nvtxEndRange()
        endif
     endif
@@ -2999,6 +3487,53 @@ contains
     end if
 
   end subroutine gpu_gradient_phi
+
+  !> @brief
+  !> This routine computes the analytical gravitational acceleration.
+  !>
+  !> @param[in] sim : The simulation object
+  !> @param[in] ilevel : The refinement level to update
+  !>
+  subroutine gpu_force_analytic(sim, ilevel)
+    use nvtx
+    use mg_device
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t), intent(inout) :: sim
+    integer, intent(in) :: ilevel
+    !
+    integer(kind=4) :: head_idx
+    integer(kind=4) :: num_octs, num_blocks
+    integer :: threadsX_per_block, threadsY_per_block
+    real(kind=8) :: dx
+
+    ! Only the built-in analytical models of gravana run on the GPU
+    if (sim%r%gravity_type > 2) then
+       write(*,*) 'gpu_force_analytic: gravity_type > 2 is not supported on the GPU'
+       stop
+    end if
+
+    dx = sim%r%boxlen/2**ilevel
+
+    head_idx = sim%m%head(ilevel)
+    num_octs = sim%m%noct(ilevel)
+    threadsX_per_block = 8
+    threadsY_per_block = 16
+    num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    if (num_octs > 0) then
+       call nvtxStartRange("GPU force_analytic", color=1)!blue
+       call force_analytic_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(grid, f, &
+            & head_idx, num_octs, real(dx,kind=dp), &
+            & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
+            & sim%r%gravity_type, &
+            & real(sim%r%gravity_params(1),kind=dp), real(sim%r%gravity_params(2),kind=dp), &
+            & real(sim%r%gravity_params(3),kind=dp), real(sim%r%gravity_params(4),kind=dp), &
+            & real(sim%r%gravity_params(5),kind=dp), sim%r%gravity_type < 0)
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    end if
+
+  end subroutine gpu_force_analytic
 
   !> @brief
   !> This routine computes the gravitational potential energy.

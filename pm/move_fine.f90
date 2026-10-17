@@ -384,9 +384,10 @@ subroutine cic_kick_drift_part(s,p,ilevel,action_part)
 !!$           if(norm2>0)then
 !!$              p%xp(ipart,1:ndim) = p%xp(ipart,1:ndim) + (ff(1:ndim)-p%fp(ipart,1:ndim))/sqrt(norm2)*delta
 !!$           endif
-           ! Store force
-           p%fp(ipart,1:ndim)=ff(1:ndim)
         endif
+
+        ! Store force for sink particles
+        if(p%type==SINK_TYPE)p%fp(ipart,1:ndim)=ff(1:ndim)
 
      else if(action_part.EQ.action_kick_only)then
 
@@ -560,11 +561,10 @@ subroutine tsc_kick_drift_part(s,p,ilevel,action_part)
 !!$           if(norm2>0)then
 !!$              p%xp(ipart,1:ndim) = p%xp(ipart,1:ndim) + (ff(1:ndim)-p%fp(ipart,1:ndim))/sqrt(norm2)*delta
 !!$           endif
-
-           ! Store old force
-           p%fp(ipart,1:ndim)=ff(1:ndim)
-
         endif
+
+        ! Store force for sink particles
+        if(p%type==SINK_TYPE)p%fp(ipart,1:ndim)=ff(1:ndim)
 
      else if(action_part.EQ.action_kick_only)then
 
@@ -743,11 +743,10 @@ subroutine pcs_kick_drift_part(s,p,ilevel,action_part)
 !!$           if(norm2>0)then
 !!$              p%xp(ipart,1:ndim) = p%xp(ipart,1:ndim) + (ff(1:ndim)-p%fp(ipart,1:ndim))/sqrt(norm2)*delta
 !!$           endif
-
-           ! Store old force
-           p%fp(ipart,1:ndim)=ff(1:ndim)
-
         endif
+
+        ! Store force for sink particles
+        if(p%type==SINK_TYPE)p%fp(ipart,1:ndim)=ff(1:ndim)
 
      else if(action_part.EQ.action_kick_only)then
 

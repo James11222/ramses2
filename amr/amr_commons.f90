@@ -165,8 +165,14 @@ module amr_commons
      integer ::niter_riemann=10
      integer ::slope_type=1
      integer ::slope_mag_type=1
-     real(kind=8)::difmag=0.0d0
-     real(kind=8)::etamag=0.0d0
+     real(kind=8)::difmag=0.0d0                     ! Explicit diffusion of conservative variables
+     real(kind=8)::etamag=0.0d0                     ! Ohmic magnetic diffusivity
+     real(kind=8)::eta_ad=0.0d0                     ! Ambipolar diffusion coefficient
+     real(kind=8)::nimhd_courant=0.8d0              ! Safety factor of explicit diffusion timestep
+     real(kind=8)::nimhd_alpha=0.5d0                ! Gegenbauer parameter of STS (>=0.5)
+     character(LEN=10)::nimhd_solver='unsplit'      ! Non-ideal MHD solver: unsplit, explicit, sts
+     character(LEN=10)::nimhd_split='strang'        ! Operator splitting: strang or godunov
+     logical::nimhd_composite=.false.               ! All levels diffused together (nsubcycle=1)
      real(kind=8),dimension(1:nener+1)::gamma_rad=1.33333333334d0
      logical ::induction=.false.
      logical ::entropy=.false.
@@ -215,7 +221,7 @@ module amr_commons
 
      ! Refinement parameters for hydro
      integer::interpol_var=0   ! Interpolated variables
-     integer::interpol_type=1  ! Interpolation scheme
+     integer::interpol_type=0  ! Interpolation scheme
      real(kind=8)::err_grad_d=-1.0  ! Density gradient
      real(kind=8)::err_grad_u=-1.0  ! Velocity gradient
      real(kind=8)::err_grad_p=-1.0  ! Pressure gradient
@@ -409,6 +415,7 @@ module amr_commons
      ! Sink parameters
      integer::rho_type_sink=1
      logical::sink_descent=.false.
+     logical::sink_recenter_on_peak=.true.
      real(kind=8)::fudge_descent=0.5d0
      real(kind=8)::sink_relevance_threshold=2
      real(kind=8)::sink_density_threshold=-1
@@ -435,7 +442,7 @@ module amr_commons
      real(kind=8)::eddington_cap = -1 ! Factor of Eddington rate to cap accretion at
      integer::sink_b_spline_order = 4 ! Order of B-spline interpolation used for sink accretion and dynamics
      logical::verbose_sink = .false. ! Whether to print verbose statements for sink particles
-     logical::bondi_use_gas_mass = .true. ! Whether to include the local gas mass in the Bondi calculation
+     logical::bondi_use_gas_mass = .false. ! Whether to include the local gas mass in the Bondi calculation
      logical::use_local_bondi_rate = .false. ! Switch to average after (true) or before (false) computing the Bondi rate
      logical::use_rho_inf = .true. ! Whether to use bondi_alpha(x) to extrapolate density at infinity from Bondi solution
      real(kind=8)::t_start_black_hole = -1 ! Time after which to start using sink particle/black hole routines

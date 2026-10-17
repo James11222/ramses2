@@ -1,0 +1,1189 @@
+!> GPU sink particle evolution CUDA kernels (accretion, drag, AGN feedback).
+module sink_device
+  use amr_parameters, only: ndim, twotondim, dp, i8b
+  use hydro_parameters, only: nvar, nener
+  use oct_commons, only: oct
+  use gpu_utils
+  use cudafor
+  use feedback_device, only: get_cell_by_key
+  use gpu_runner, only: grid, uold, unew, bold, rho, &
+       & sink_xp, sink_vp, sink_mp, sink_tp, sink_jp, sink_idp, sink_tm, sink_idm
+  implicit none
+
+  ! Krumholz et al. 2004 table of alpha = rho/rho_inf for x = r/r_Bondi in [0.01,2]
+  real(kind=dp), parameter, dimension(51) :: alphatable_const = (/ &
+       820.254_dp, 701.882_dp, 600.752_dp, 514.341_dp, 440.497_dp, 377.381_dp, 323.427_dp, &
+       277.295_dp, 237.845_dp, 204.1_dp, 175.23_dp, 150.524_dp, 129.377_dp, 111.27_dp, 95.7613_dp, &
+       82.4745_dp, 71.0869_dp, 61.3237_dp, 52.9498_dp, 45.7644_dp, 39.5963_dp, 34.2989_dp, &
+       29.7471_dp, 25.8338_dp, 22.4676_dp, 19.5705_dp, 17.0755_dp, 14.9254_dp, 13.0714_dp, &
+       11.4717_dp, 10.0903_dp, 8.89675_dp, 7.86467_dp, 6.97159_dp, 6.19825_dp, 5.52812_dp, &
+       4.94699_dp, 4.44279_dp, 4.00497_dp, 3.6246_dp, 3.29395_dp, 3.00637_dp, 2.75612_dp, &
+       2.53827_dp, 2.34854_dp, 2.18322_dp, 2.03912_dp, 1.91344_dp, 1.80378_dp, 1.70804_dp, &
+       1.62439_dp /)
+
+  ! Collision pair buffers for the sink merger (mirrors ncollision_max in
+  ! sink_merger_module). Pairs beyond ncollision_max are dropped on the GPU.
+  integer, parameter :: ncollision_max = 1000
+  integer(kind=4), device :: npair_d
+  integer(kind=4), device, dimension(1:ncollision_max) :: pair_id1_d, pair_id2_d
+  integer(kind=4), device, dimension(1:ncollision_max) :: pair_idx1_d, pair_idx2_d
+
+contains
+
+  include 'gpu_reduce.cuf'
+
+  !> B-spline cell key and weight of the j-th stencil cell (j=0..order**3-1)
+  !> for a sink at position x (in units of dx at level ilevel).
+  !> Mirrors sink_B_spline_weights_CIC/TSC/PCS, including periodic wrap.
+  attributes(device) subroutine sink_bspline_device(order, x, j, &
+       & box_ckey_min_d, box_ckey_max_d, periodic_d, ilevel, ckey, xnei, w)
+    implicit none
+    integer(kind=4), intent(in), value :: order
+    real(kind=dp), intent(in) :: x(3)
+    integer(kind=4), intent(in), value :: j
+    integer(kind=4), device :: box_ckey_min_d(3,*)
+    integer(kind=4), device :: box_ckey_max_d(3,*)
+    logical, device :: periodic_d(3)
+    integer(kind=4), intent(in), value :: ilevel
+    integer(kind=4), intent(out) :: ckey(3)
+    real(kind=dp), intent(out) :: xnei(3)
+    real(kind=dp), intent(out) :: w
+
+    integer :: idim, k, jj, ibase
+    real(kind=dp) :: dr, xc, wd
+
+    w = 1.0_dp
+    jj = j
+    do idim = 1, 3
+       k = mod(jj, order)
+       jj = jj / order
+       if (order == 2) then
+          ! CIC (dr: right cloud boundary)
+          dr = x(idim) + 0.5_dp
+          ibase = floor(dr) - 1
+          dr = dr - real(ibase + 1, kind=dp)
+          if (k == 0) then
+             wd = 1.0_dp - dr
+          else
+             wd = dr
+          endif
+       else if (order == 3) then
+          ! TSC
+          ibase = int(x(idim)) - 1
+          xc = real(ibase + k, kind=dp) + 0.5_dp
+          if (k == 1) then
+             wd = 0.75_dp - (x(idim) - xc)**2
+          else
+             wd = 0.5_dp * (1.5_dp - abs(x(idim) - xc))**2
+          endif
+       else
+          ! PCS
+          ibase = int(x(idim) + 1.5_dp) - 3
+          xc = real(ibase + k, kind=dp) + 0.5_dp
+          if (k == 0 .or. k == 3) then
+             wd = (2.0_dp - abs(x(idim) - xc))**3 / 6.0_dp
+          else
+             wd = (4.0_dp - 6.0_dp*(x(idim) - xc)**2 + 3.0_dp*abs(x(idim) - xc)**3) / 6.0_dp
+          endif
+       endif
+       w = w * wd
+       ckey(idim) = ibase + k
+       xnei(idim) = real(ibase + k, kind=dp) + 0.5_dp
+       ! Periodic boundary conditions
+       if (periodic_d(idim)) then
+          if (ckey(idim) <  box_ckey_min_d(idim, ilevel + 1)) &
+               & ckey(idim) = ckey(idim) - box_ckey_min_d(idim, ilevel + 1) + box_ckey_max_d(idim, ilevel + 1)
+          if (ckey(idim) >= box_ckey_max_d(idim, ilevel + 1)) &
+               & ckey(idim) = ckey(idim) + box_ckey_min_d(idim, ilevel + 1) - box_ckey_max_d(idim, ilevel + 1)
+       endif
+    end do
+  end subroutine sink_bspline_device
+
+  !> alpha = rho/rho_inf for a critical Bondi solution at x = r/r_Bondi
+  !> (Krumholz et al. 2004), mirrors bondi_alpha in sink_evolution.f90
+  attributes(device) function bondi_alpha_device(x) result(alpha)
+    implicit none
+    real(kind=dp), intent(in), value :: x
+    real(kind=dp) :: alpha
+
+    real(kind=dp), parameter :: xmin = 0.01_dp, xmax = 2.0_dp
+    integer, parameter :: ntable = 51
+    real(kind=dp) :: lambda_c, xtable, xtablep1, alpha_exp
+    integer :: idx
+
+    lambda_c = exp(1.5_dp) / 4.0_dp
+    if (x <= xmin) then
+       alpha = lambda_c / sqrt(2.0_dp * x**3)
+    else if (x >= xmax) then
+       alpha = exp(1.0_dp / x)
+    else
+       idx = floor((ntable - 1) * log(x / xmin) / log(xmax / xmin))
+       xtable   = exp(log(xmin) + real(idx, kind=dp)     * log(xmax / xmin) / real(ntable - 1, kind=dp))
+       xtablep1 = exp(log(xmin) + real(idx + 1, kind=dp) * log(xmax / xmin) / real(ntable - 1, kind=dp))
+       alpha_exp = log(x / xtable) / log(xtablep1 / xtable)
+       alpha = alphatable_const(idx + 1) * (alphatable_const(idx + 2) / alphatable_const(idx + 1))**alpha_exp
+    endif
+  end function bondi_alpha_device
+
+  !> AGN feedback radial weight, mirrors psy_function (constant for now)
+  attributes(device) function psy_function_device(quasar_mode, r) result(psy)
+    implicit none
+    logical, intent(in), value :: quasar_mode
+    real(kind=dp), intent(in), value :: r
+    real(kind=dp) :: psy
+
+    psy = 1.0_dp
+  end function psy_function_device
+
+  !> AGN feedback: test offset n of the (2R+1)^3 lattice around the sink. If the
+  !> cell at that offset receives feedback, return its unwrapped position, its
+  !> radial weight psy (> 0) and its density. Mirrors the weight pass of AGN_feedback.
+  attributes(device) subroutine agn_offset_device(n, radius, xcen, quasar_mode, jet, tan_theta, &
+       & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+       & box_ckey_min_d, box_ckey_max_d, periodic_d, ilevel, smallr, xbh, psy, d)
+    implicit none
+    integer(kind=4), intent(in), value :: n, radius
+    real(kind=dp), intent(in) :: xcen(3), jet(3)
+    logical, intent(in), value :: quasar_mode
+    real(kind=dp), intent(in), value :: tan_theta
+    integer(kind=8), device :: hash_key_d(*)
+    integer(kind=4), device :: hash_val_d(*)
+    integer(kind=4), intent(in), value :: hash_size_d
+    integer(kind=4), device :: ckey_max_d(*)
+    integer(kind=8), device :: key_off_d(*)
+    integer(kind=4), intent(in), value :: ngridmax
+    integer(kind=4), device :: box_ckey_min_d(3,*)
+    integer(kind=4), device :: box_ckey_max_d(3,*)
+    logical, device :: periodic_d(3)
+    integer(kind=4), intent(in), value :: ilevel
+    real(kind=dp), intent(in), value :: smallr
+    real(kind=dp), intent(out) :: xbh(3), psy, d
+
+    integer :: idim, nside, igrid, icell
+    integer(kind=4) :: ckey(3)
+    real(kind=dp) :: x_rel(3), r_rel, cone_dist, orth_dist
+
+    psy = 0.0_dp
+    d = 0.0_dp
+    nside = 2 * radius + 1
+    x_rel(1) = real(mod(n, nside) - radius, kind=dp)
+    x_rel(2) = real(mod(n / nside, nside) - radius, kind=dp)
+    x_rel(3) = real(n / (nside * nside) - radius, kind=dp)
+    r_rel = sqrt(x_rel(1)**2 + x_rel(2)**2 + x_rel(3)**2)
+    if (r_rel >= real(radius, kind=dp)) return
+
+    ! Jet mode: keep cells inside the cone, excluding the central cell
+    if (.not. quasar_mode) then
+       cone_dist = x_rel(1) * jet(1) + x_rel(2) * jet(2) + x_rel(3) * jet(3)
+       orth_dist = sqrt((x_rel(1) - cone_dist * jet(1))**2 + (x_rel(2) - cone_dist * jet(2))**2 &
+            & + (x_rel(3) - cone_dist * jet(3))**2)
+       if (orth_dist > abs(cone_dist) * tan_theta) return
+       if (r_rel < 1.0_dp) return
+    endif
+
+    ! Unwrapped position and periodic cartesian key of the cell
+    do idim = 1, 3
+       xbh(idim) = x_rel(idim) + xcen(idim)
+       ckey(idim) = floor(xbh(idim))
+       if (periodic_d(idim)) then
+          if (ckey(idim) <  box_ckey_min_d(idim, ilevel + 1)) &
+               & ckey(idim) = ckey(idim) - box_ckey_min_d(idim, ilevel + 1) + box_ckey_max_d(idim, ilevel + 1)
+          if (ckey(idim) >= box_ckey_max_d(idim, ilevel + 1)) &
+               & ckey(idim) = ckey(idim) + box_ckey_min_d(idim, ilevel + 1) - box_ckey_max_d(idim, ilevel + 1)
+       endif
+    end do
+
+    ! Missing or refined cells must not contribute to the weight normalization
+    call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+         & ilevel, ckey, igrid, icell)
+    if (igrid <= 0 .or. igrid > ngridmax) return
+    if (grid(igrid)%refined(icell)) return
+
+    psy = psy_function_device(quasar_mode, r_rel)
+    d = max(uold(icell, 1, igrid), smallr)
+  end subroutine agn_offset_device
+
+  !> Sink evolution: one block per sink of level ilevel. Mirrors the loop
+  !> body of sink_evolution in sink_evolution.f90: [A] accretion (one thread
+  !> per B-spline cell), [B] dynamical friction, [C] AGN feedback, [D] periodic wrap.
+  attributes(global) subroutine sink_evolution_kernel( &
+       & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+       & box_ckey_min_d, box_ckey_max_d, periodic_d, &
+       & head_idx, ilevel, order, nBHnei, accretion_type, &
+       & skip1, skip2, skip3, dx_loc, vol_loc, dtnew, t, &
+       & factG, lambda_sonic, edd_fac, eddington_cap, eddington_floor, &
+       & t_start_black_hole, manual_accretion_rate, sink_density_threshold, sink_relevance_threshold, &
+       & gamma, smallr, smallc, boost_fac, &
+       & use_local_bondi_rate, bondi_use_vrel, bondi_use_gas_mass, use_rho_inf, &
+       & mass_weighting, momentum_conserving, fix_sink_mass, static, drag_sink, &
+       & agn, agn_use_mass_weighting, agn_feedback_radius, tan_theta, agn_fbk_mode_switch_threshold, &
+       & epsilon_rad, epsilon_quasar, epsilon_radio, momentum_boost, c_code, &
+       & bs1, bs2, bs3, macc_loc_d)
+    implicit none
+    integer(kind=8), device :: hash_key_d(*)
+    integer(kind=4), device :: hash_val_d(*)
+    integer(kind=4), intent(in), value :: hash_size_d
+    integer(kind=4), device :: ckey_max_d(*)
+    integer(kind=8), device :: key_off_d(*)
+    integer(kind=4), intent(in), value :: ngridmax
+    integer(kind=4), device :: box_ckey_min_d(3,*)
+    integer(kind=4), device :: box_ckey_max_d(3,*)
+    logical, device :: periodic_d(3)
+    integer(kind=4), intent(in), value :: head_idx, ilevel, order, nBHnei, accretion_type
+    real(kind=dp), intent(in), value :: skip1, skip2, skip3, dx_loc, vol_loc, dtnew, t
+    real(kind=dp), intent(in), value :: factG, lambda_sonic, edd_fac, eddington_cap, eddington_floor
+    real(kind=dp), intent(in), value :: t_start_black_hole, manual_accretion_rate, sink_density_threshold
+    real(kind=dp), intent(in), value :: sink_relevance_threshold
+    real(kind=dp), intent(in), value :: gamma, smallr, smallc, boost_fac
+    logical, intent(in), value :: use_local_bondi_rate, bondi_use_vrel, bondi_use_gas_mass, use_rho_inf
+    logical, intent(in), value :: mass_weighting, momentum_conserving, fix_sink_mass, static
+    logical, intent(in), value :: drag_sink
+    logical, intent(in), value :: agn, agn_use_mass_weighting
+    integer(kind=4), intent(in), value :: agn_feedback_radius
+    real(kind=dp), intent(in), value :: tan_theta, agn_fbk_mode_switch_threshold
+    real(kind=dp), intent(in), value :: epsilon_rad, epsilon_quasar, epsilon_radio, momentum_boost, c_code
+    real(kind=dp), intent(in), value :: bs1, bs2, bs3
+    real(kind=dp), device :: macc_loc_d
+
+    real(kind=dp), parameter :: pi = 3.14159265358979_dp
+    real(kind=dp), shared :: s_dMBH, s_rho_gas
+    logical, shared :: s_skip
+    logical, shared :: s_do_agn, s_quasar
+    real(kind=dp), shared :: s_jet(3), s_xcen(3), s_fbk_ener, s_fbk_mom, s_total_weight, s_rho_gas_fb
+    integer :: ipart, j, idim, igrid, icell, igridn, icelln, info
+#if NVAR>5+NENER
+    integer :: ivar
+#endif
+#if NENER>0
+    integer :: irad
+#endif
+    integer(kind=4) :: ckey(3), ckey_div(3)
+    logical :: found
+    real(kind=dp) :: xcen(3), xnei(3), x_rel(3), vv(3), v_rel(3), vp(3)
+    real(kind=dp) :: w, d, e, ethermal, cs, mp, mtot
+    real(kind=dp) :: rho_gas, cs_gas, m_gas, rho_av_all, weighted_bondi, total_divergence
+    real(kind=dp) :: vel_gas(3)
+    real(kind=dp) :: div_right, div_left, v_bondi, bondi_mass, rb, rb_max, r_rel
+    real(kind=dp) :: rho_inf, dMBH, dMED
+    real(kind=dp) :: d_acc, m_acc, x_acc(3), p_acc(3), l_acc(3)
+    real(kind=dp) :: mach, mach_c, fI, v_rel_mag, drag_accel, dv_drag
+    integer :: n, nlat, jc
+    real(kind=dp) :: acc_ratio, jnorm, energy_agn, tw, rg, xbh(3), psy, w_fb, weight
+    real(kind=dp) :: fbk_mom_loc, cone_dist
+#ifdef MHD
+    real(kind=dp) :: bx, by, bz
+#endif
+
+    ipart = head_idx + blockIdx%x - 1
+    j = threadIdx%x - 1
+
+    ! Skip zero-mass (merged/defunct) sinks (the whole block exits)
+    if (sink_mp(ipart) <= 0.0_dp) return
+
+    mp = sink_mp(ipart)
+    vp(1) = sink_vp(ipart, 1)
+    vp(2) = sink_vp(ipart, 2)
+    vp(3) = sink_vp(ipart, 3)
+    xcen(1) = (sink_xp(ipart, 1) + skip1) / dx_loc
+    xcen(2) = (sink_xp(ipart, 2) + skip2) / dx_loc
+    xcen(3) = (sink_xp(ipart, 3) + skip3) / dx_loc
+
+    ! Largest Bondi radius whose square times a density cannot overflow
+    rb_max = sqrt(sqrt(huge(1.0_dp)))
+
+    ! Accretion outputs, also read by friction and AGN feedback
+    ! (zero when accretion is disabled, as on the CPU)
+    rho_gas = 0.0_dp; vel_gas = 0.0_dp; cs_gas = 0.0_dp; m_gas = 0.0_dp
+    rho_av_all = 0.0_dp; weighted_bondi = 0.0_dp; total_divergence = 0.0_dp
+    rho_inf = 0.0_dp; dMBH = 0.0_dp; dMED = 0.0_dp
+
+    !===========================================
+    ! [A] Sink accretion
+    !===========================================
+    if (accretion_type > 0) then
+
+    !-------------------------------------------
+    ! Gather: collect local gas information
+    !-------------------------------------------
+
+    found = .false.
+    if (j < nBHnei) then
+       call sink_bspline_device(order, xcen, j, box_ckey_min_d, box_ckey_max_d, periodic_d, &
+            & ilevel, ckey, xnei, w)
+       call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+            & ilevel, ckey, igrid, icell)
+       found = (igrid > 0 .and. igrid <= ngridmax)
+    endif
+
+    if (found) then
+       x_rel(1:3) = xnei(1:3) - xcen(1:3)
+       d     = max(uold(icell, 1, igrid), smallr)
+       vv(1) = uold(icell, 2, igrid) / d
+       vv(2) = uold(icell, 3, igrid) / d
+       vv(3) = uold(icell, 4, igrid) / d
+       e     = uold(icell, 5, igrid)
+       ! Remove all non-thermal energies as they are not accreted
+#ifdef MHD
+       bx = 0.5_dp * (bold(icell, 1, igrid) + bold(icell, 4, igrid))
+       by = 0.5_dp * (bold(icell, 2, igrid) + bold(icell, 5, igrid))
+       bz = 0.5_dp * (bold(icell, 3, igrid) + bold(icell, 6, igrid))
+       e = e - 0.5_dp * (bx**2 + by**2 + bz**2)
+#endif
+#if NENER>0
+       do irad = 1, nener
+          e = e - uold(icell, 5 + irad, igrid)
+       end do
+#endif
+       ethermal = (e - 0.5_dp * d * (vv(1)**2 + vv(2)**2 + vv(3)**2)) / d
+       cs = sqrt(max(gamma * (gamma - 1.0_dp) * ethermal, smallc**2) * boost_fac)
+
+       ! Add to average (weighted) information
+       rho_gas      = d * w
+       vel_gas(1:3) = vv(1:3) * w
+       cs_gas       = cs * w
+       m_gas        = d * w * vol_loc
+#ifdef GRAV
+       rho_av_all   = rho(icell, igrid) * w
+#endif
+       ! Local mass divergence for Bleuler+14 flux accretion
+       if (accretion_type == 2) then
+          do idim = 1, 3
+             ckey_div(1:3) = ckey(1:3)
+             ckey_div(idim) = ckey_div(idim) + 1
+             ! Periodic boundary conditions
+             if (periodic_d(idim)) then
+                if (ckey_div(idim) <  box_ckey_min_d(idim, ilevel + 1)) &
+                     & ckey_div(idim) = ckey_div(idim) - box_ckey_min_d(idim, ilevel + 1) + box_ckey_max_d(idim, ilevel + 1)
+                if (ckey_div(idim) >= box_ckey_max_d(idim, ilevel + 1)) &
+                     & ckey_div(idim) = ckey_div(idim) + box_ckey_min_d(idim, ilevel + 1) - box_ckey_max_d(idim, ilevel + 1)
+             else if (ckey_div(idim) < box_ckey_min_d(idim, ilevel + 1) .or. &
+                  & ckey_div(idim) >= box_ckey_max_d(idim, ilevel + 1)) then
+                cycle
+             endif
+             call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+                  & ilevel, ckey_div, igridn, icelln)
+             if (igridn <= 0 .or. igridn > ngridmax) cycle
+             div_right = (uold(icelln, 1 + idim, igridn) &
+                  & - max(uold(icelln, 1, igridn), smallr) * vp(idim)) / dx_loc
+             ckey_div(1:3) = ckey(1:3)
+             ckey_div(idim) = ckey_div(idim) - 1
+             ! Periodic boundary conditions
+             if (periodic_d(idim)) then
+                if (ckey_div(idim) <  box_ckey_min_d(idim, ilevel + 1)) &
+                     & ckey_div(idim) = ckey_div(idim) - box_ckey_min_d(idim, ilevel + 1) + box_ckey_max_d(idim, ilevel + 1)
+                if (ckey_div(idim) >= box_ckey_max_d(idim, ilevel + 1)) &
+                     & ckey_div(idim) = ckey_div(idim) + box_ckey_min_d(idim, ilevel + 1) - box_ckey_max_d(idim, ilevel + 1)
+             else if (ckey_div(idim) < box_ckey_min_d(idim, ilevel + 1) .or. &
+                  & ckey_div(idim) >= box_ckey_max_d(idim, ilevel + 1)) then
+                cycle
+             endif
+             call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+                  & ilevel, ckey_div, igridn, icelln)
+             if (igridn <= 0 .or. igridn > ngridmax) cycle
+             div_left = (uold(icelln, 1 + idim, igridn) &
+                  & - max(uold(icelln, 1, igridn), smallr) * vp(idim)) / dx_loc
+             total_divergence = total_divergence + (div_right - div_left) / 2.0_dp
+          end do
+       endif
+
+       ! Local Bondi rate
+       if (use_local_bondi_rate) then
+          v_rel(1:3) = vv(1:3) - vp(1:3)
+          if (bondi_use_vrel) then
+             v_bondi = sqrt(v_rel(1)**2 + v_rel(2)**2 + v_rel(3)**2 + cs**2)
+          else
+             v_bondi = cs
+          endif
+          if (bondi_use_gas_mass) then
+             bondi_mass = mp + d * vol_loc
+          else
+             bondi_mass = mp
+          endif
+          rb = min(factG * bondi_mass / v_bondi**2, rb_max)
+          if (use_rho_inf) then
+             r_rel = sqrt(x_rel(1)**2 + x_rel(2)**2 + x_rel(3)**2) * dx_loc
+             rho_inf = d / bondi_alpha_device(r_rel / (rb + tiny(1.0_dp)))
+          else
+             rho_inf = d
+          endif
+          weighted_bondi = 4.0_dp * pi * rho_inf * rb * rb * v_bondi * lambda_sonic * w
+       endif
+    endif
+
+    rho_gas          = block_reduce_dp_sum(rho_gas)
+    vel_gas(1)       = block_reduce_dp_sum(vel_gas(1))
+    vel_gas(2)       = block_reduce_dp_sum(vel_gas(2))
+    vel_gas(3)       = block_reduce_dp_sum(vel_gas(3))
+    cs_gas           = block_reduce_dp_sum(cs_gas)
+    m_gas            = block_reduce_dp_sum(m_gas)
+    rho_av_all       = block_reduce_dp_sum(rho_av_all)
+    weighted_bondi   = block_reduce_dp_sum(weighted_bondi)
+    total_divergence = block_reduce_dp_sum(total_divergence)
+
+    !-------------------------------------------
+    ! Rate: compute and limit the accretion rate
+    !-------------------------------------------
+    if (j == 0) then
+       dMBH = 0.0_dp
+       rho_inf = 0.0_dp
+       if (accretion_type == 1) then
+          if (use_local_bondi_rate) then
+             dMBH = weighted_bondi
+          else
+             v_rel(1:3) = vel_gas(1:3) - vp(1:3)
+             if (bondi_use_vrel) then
+                v_bondi = sqrt(v_rel(1)**2 + v_rel(2)**2 + v_rel(3)**2 + cs_gas**2)
+             else
+                v_bondi = cs_gas
+             endif
+             if (bondi_use_gas_mass) then
+                bondi_mass = mp + m_gas
+             else
+                bondi_mass = mp
+             endif
+             rb = min(factG * bondi_mass / v_bondi**2, rb_max)
+             if (use_rho_inf) then
+                rho_inf = rho_gas / bondi_alpha_device(real(order, kind=dp) * 0.5_dp * dx_loc / (rb + tiny(1.0_dp)))
+             else
+                rho_inf = rho_gas
+             endif
+             dMBH = 4.0_dp * pi * rho_inf * rb * rb * v_bondi * lambda_sonic
+          endif
+       else if (accretion_type == 2) then
+          dMBH = -total_divergence * vol_loc
+          if (sink_density_threshold > 0.0_dp) then
+             dMBH = dMBH * (1.0_dp + 0.1_dp * log(rho_gas / sink_density_threshold))
+          endif
+       else if (accretion_type == 3) then
+          ! Accrete in one time step all the gas above the effective peak density for sink formation
+          dMBH = (rho_gas - sink_relevance_threshold * sink_density_threshold) * vol_loc &
+               & * real(nBHnei, kind=dp) / dtnew
+          dMBH = max(dMBH, 0.0_dp)
+       endif
+
+       ! Eddington rate and optional cap
+       dMED = edd_fac * mp
+       if (eddington_cap > 0.0_dp) dMBH = min(dMBH, dMED * eddington_cap)
+
+       ! If the accretion rate is too low, do nothing
+       s_skip = (eddington_floor > 0.0_dp .and. dMBH / dMED < eddington_floor)
+
+       if (.not. s_skip) then
+          ! Limit total accreted mass to 75% of the accretion region mass
+          dMBH = min(dMBH, 0.75_dp * rho_gas * vol_loc * real(nBHnei, kind=dp) / dtnew)
+          if ((t - sink_tp(ipart)) < t_start_black_hole .and. t_start_black_hole > 0.0_dp) then
+             dMBH = exp(t - sink_tp(ipart) - t_start_black_hole) * dMBH
+          endif
+          if (manual_accretion_rate > 0.0_dp) dMBH = manual_accretion_rate * dMED
+       endif
+
+       s_dMBH = dMBH
+       s_rho_gas = rho_gas
+    endif
+    call syncthreads()
+
+    ! The Eddington floor only skips the accretion itself: friction and
+    ! AGN feedback still run with the capped rate (CPU early return)
+    if (.not. s_skip) then
+
+    !-------------------------------------------
+    ! Scatter: accrete from local cells
+    !-------------------------------------------
+    m_acc = 0.0_dp; x_acc = 0.0_dp; p_acc = 0.0_dp; l_acc = 0.0_dp
+    if (found) then
+       if (.not. grid(igrid)%refined(icell)) then
+          d     = max(uold(icell, 1, igrid), smallr)
+          vv(1) = uold(icell, 2, igrid) / d
+          vv(2) = uold(icell, 3, igrid) / d
+          vv(3) = uold(icell, 4, igrid) / d
+          e     = uold(icell, 5, igrid) / d
+#ifdef MHD
+          e = e - 0.5_dp * (bx**2 + by**2 + bz**2) / d
+#endif
+#if NENER>0
+          do irad = 1, nener
+             e = e - uold(icell, 5 + irad, igrid) / d
+          end do
+#endif
+          ! Accreted density for this cell, never more than 75% of the cell
+          d_acc = s_dMBH * dtnew * w / vol_loc
+          if (mass_weighting) d_acc = d_acc * d / s_rho_gas
+          d_acc = max(d_acc, 0.0_dp)
+          d_acc = min(d_acc, 0.75_dp * d)
+
+          ! Accrete from the cell
+          info = atomicadd(unew(icell, 1, igrid), -d_acc)
+          info = atomicadd(unew(icell, 2, igrid), -d_acc * vv(1))
+          info = atomicadd(unew(icell, 3, igrid), -d_acc * vv(2))
+          info = atomicadd(unew(icell, 4, igrid), -d_acc * vv(3))
+          info = atomicadd(unew(icell, 5, igrid), -d_acc * e)
+#if NVAR>5+NENER
+          do ivar = 6 + nener, nvar
+             info = atomicadd(unew(icell, ivar, igrid), -d_acc * uold(icell, ivar, igrid) / d)
+          end do
+#endif
+          ! Accreted mass, relative center of mass, momentum and angular momentum
+          v_rel(1:3) = vv(1:3) - vp(1:3)
+          m_acc = d_acc * vol_loc
+          if (momentum_conserving) then
+             x_acc(1:3) = d_acc * x_rel(1:3) * vol_loc * dx_loc
+             p_acc(1:3) = d_acc * v_rel(1:3) * vol_loc
+             l_acc(1) = d_acc * (x_rel(2) * v_rel(3) - x_rel(3) * v_rel(2)) * vol_loc * dx_loc
+             l_acc(2) = d_acc * (x_rel(3) * v_rel(1) - x_rel(1) * v_rel(3)) * vol_loc * dx_loc
+             l_acc(3) = d_acc * (x_rel(1) * v_rel(2) - x_rel(2) * v_rel(1)) * vol_loc * dx_loc
+          endif
+       endif
+    endif
+
+    m_acc    = block_reduce_dp_sum(m_acc)
+    x_acc(1) = block_reduce_dp_sum(x_acc(1))
+    x_acc(2) = block_reduce_dp_sum(x_acc(2))
+    x_acc(3) = block_reduce_dp_sum(x_acc(3))
+    p_acc(1) = block_reduce_dp_sum(p_acc(1))
+    p_acc(2) = block_reduce_dp_sum(p_acc(2))
+    p_acc(3) = block_reduce_dp_sum(p_acc(3))
+    l_acc(1) = block_reduce_dp_sum(l_acc(1))
+    l_acc(2) = block_reduce_dp_sum(l_acc(2))
+    l_acc(3) = block_reduce_dp_sum(l_acc(3))
+
+    !-------------------------------------------
+    ! Add accreted quantities to the sink
+    !-------------------------------------------
+    if (j == 0) then
+       mtot = mp + m_acc
+       if (.not. static) then
+          sink_xp(ipart, 1) = sink_xp(ipart, 1) + x_acc(1) / mtot
+          sink_xp(ipart, 2) = sink_xp(ipart, 2) + x_acc(2) / mtot
+          sink_xp(ipart, 3) = sink_xp(ipart, 3) + x_acc(3) / mtot
+       endif
+       sink_vp(ipart, 1) = sink_vp(ipart, 1) + p_acc(1) / mtot
+       sink_vp(ipart, 2) = sink_vp(ipart, 2) + p_acc(2) / mtot
+       sink_vp(ipart, 3) = sink_vp(ipart, 3) + p_acc(3) / mtot
+       sink_jp(ipart, 1) = (mp * sink_jp(ipart, 1) + l_acc(1)) / mtot
+       sink_jp(ipart, 2) = (mp * sink_jp(ipart, 2) + l_acc(2)) / mtot
+       sink_jp(ipart, 3) = (mp * sink_jp(ipart, 3) + l_acc(3)) / mtot
+       if (.not. fix_sink_mass) sink_mp(ipart) = mtot
+       info = atomicadd(macc_loc_d, m_acc)
+    endif
+
+    endif ! not s_skip
+    endif ! accretion_type > 0
+
+    !===========================================
+    ! [B] Dynamical friction (Ostriker 1999), mirrors dynamical_friction
+    !===========================================
+    if (drag_sink .and. j == 0) then
+       ! Velocity of the gas relative to the (updated) sink velocity
+       v_rel(1) = vel_gas(1) - sink_vp(ipart, 1)
+       v_rel(2) = vel_gas(2) - sink_vp(ipart, 2)
+       v_rel(3) = vel_gas(3) - sink_vp(ipart, 3)
+       v_rel_mag = sqrt(v_rel(1)**2 + v_rel(2)**2 + v_rel(3)**2)
+       if (v_rel_mag > 0.0_dp .and. cs_gas > 0.0_dp) then
+          mach = v_rel_mag / cs_gas
+          ! Both regimes are singular at mach=1, so the Mach number is clamped away from it
+          if (mach < 1.0_dp) then
+             ! Subsonic; series at small mach avoids cancellation
+             mach_c = min(mach, 0.99_dp)
+             if (mach_c < 0.01_dp) then
+                fI = mach_c**3 / 3.0_dp
+             else
+                fI = 0.5_dp * log((1.0_dp + mach_c) / (1.0_dp - mach_c)) - mach_c
+             endif
+          else
+             ! Supersonic, value for log(Lambda) taken from Beckmann+2018
+             mach_c = max(mach, 1.01_dp)
+             fI = 0.5_dp * log(mach_c**2 - 1.0_dp) + 4.0_dp
+          endif
+          ! Drag acceleration, limited so drag can at most cancel the relative velocity
+          drag_accel = fI * 4.0_dp * pi * factG**2 * sink_mp(ipart) * rho_av_all / v_rel_mag**2
+          dv_drag = min(drag_accel * dtnew, v_rel_mag)
+          sink_vp(ipart, 1) = sink_vp(ipart, 1) + dv_drag * v_rel(1) / v_rel_mag
+          sink_vp(ipart, 2) = sink_vp(ipart, 2) + dv_drag * v_rel(2) / v_rel_mag
+          sink_vp(ipart, 3) = sink_vp(ipart, 3) + dv_drag * v_rel(3) / v_rel_mag
+       endif
+    endif
+
+    !===========================================
+    ! [C] AGN feedback, mirrors AGN_feedback
+    !===========================================
+    if (agn) then
+       ! Thread 0 holds the accretion rates; nothing to inject without a positive rate
+       if (j == 0) then
+          s_do_agn = (dMBH > 0.0_dp)
+          if (s_do_agn) then
+             acc_ratio = 0.0_dp
+             if (dMED > 0.0_dp) acc_ratio = dMBH / dMED
+             jnorm = sqrt(sink_jp(ipart, 1)**2 + sink_jp(ipart, 2)**2 + sink_jp(ipart, 3)**2)
+             s_quasar = (acc_ratio > agn_fbk_mode_switch_threshold) .or. (jnorm <= 0.0_dp)
+             s_jet(1) = sink_jp(ipart, 1) / (jnorm + tiny(1.0_dp))
+             s_jet(2) = sink_jp(ipart, 2) / (jnorm + tiny(1.0_dp))
+             s_jet(3) = sink_jp(ipart, 3) / (jnorm + tiny(1.0_dp))
+             ! Sink position after accretion
+             s_xcen(1) = (sink_xp(ipart, 1) + skip1) / dx_loc
+             s_xcen(2) = (sink_xp(ipart, 2) + skip2) / dx_loc
+             s_xcen(3) = (sink_xp(ipart, 3) + skip3) / dx_loc
+             ! Quasar mode energy and radio mode momentum
+             energy_agn = epsilon_rad * dMBH * c_code**2 * dtnew
+             s_fbk_ener = epsilon_quasar * energy_agn
+             s_fbk_mom  = epsilon_radio * momentum_boost * energy_agn / c_code
+          endif
+       endif
+       call syncthreads()
+
+       if (s_do_agn) then
+          nlat = (2 * agn_feedback_radius + 1)**3
+
+          ! Weight pass: total weight and weighted density of the feedback region
+          tw = 0.0_dp; rg = 0.0_dp
+          do n = j, nlat - 1, blockDim%x
+             call agn_offset_device(n, agn_feedback_radius, s_xcen, s_quasar, s_jet, tan_theta, &
+                  & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+                  & box_ckey_min_d, box_ckey_max_d, periodic_d, ilevel, smallr, xbh, psy, d)
+             tw = tw + psy
+             rg = rg + d * psy
+          end do
+          tw = block_reduce_dp_sum(tw)
+          rg = block_reduce_dp_sum(rg)
+          if (j == 0) then
+             s_total_weight = tw
+             s_rho_gas_fb = 0.0_dp
+             if (tw > 0.0_dp) s_rho_gas_fb = rg / tw
+          endif
+          call syncthreads()
+
+          ! Scatter pass: CIC injection around each feedback cell
+          if (s_total_weight > 0.0_dp) then
+             do n = j, nlat - 1, blockDim%x
+                call agn_offset_device(n, agn_feedback_radius, s_xcen, s_quasar, s_jet, tan_theta, &
+                     & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+                     & box_ckey_min_d, box_ckey_max_d, periodic_d, ilevel, smallr, xbh, psy, d)
+                if (psy <= 0.0_dp) cycle
+                w_fb = psy / s_total_weight
+                do jc = 0, twotondim - 1
+                   call sink_bspline_device(2, xbh, jc, box_ckey_min_d, box_ckey_max_d, periodic_d, &
+                        & ilevel, ckey, xnei, w)
+                   x_rel(1:3) = xnei(1:3) - s_xcen(1:3)
+                   r_rel = sqrt(x_rel(1)**2 + x_rel(2)**2 + x_rel(3)**2)
+                   call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+                        & ilevel, ckey, igridn, icelln)
+                   if (igridn <= 0 .or. igridn > ngridmax) cycle
+                   if (grid(igridn)%refined(icelln)) cycle
+                   d     = max(uold(icelln, 1, igridn), smallr)
+                   vv(1) = uold(icelln, 2, igridn) / d
+                   vv(2) = uold(icelln, 3, igridn) / d
+                   vv(3) = uold(icelln, 4, igridn) / d
+                   weight = w * w_fb
+                   if (agn_use_mass_weighting) weight = weight * d / s_rho_gas_fb
+                   if (s_quasar) then
+                      ! Quasar mode (energy)
+                      info = atomicadd(unew(icelln, 5, igridn), s_fbk_ener * weight / vol_loc)
+                   else
+                      ! Radio mode (momentum and associated work)
+                      fbk_mom_loc = s_fbk_mom * weight / vol_loc
+                      cone_dist = (s_jet(1) * x_rel(1) + s_jet(2) * x_rel(2) + s_jet(3) * x_rel(3)) &
+                           & / (r_rel + tiny(1.0_dp))
+                      info = atomicadd(unew(icelln, 2, igridn), fbk_mom_loc * cone_dist * s_jet(1))
+                      info = atomicadd(unew(icelln, 3, igridn), fbk_mom_loc * cone_dist * s_jet(2))
+                      info = atomicadd(unew(icelln, 4, igridn), fbk_mom_loc * cone_dist * s_jet(3))
+                      info = atomicadd(unew(icelln, 5, igridn), fbk_mom_loc * cone_dist &
+                           & * (s_jet(1) * vv(1) + s_jet(2) * vv(2) + s_jet(3) * vv(3)))
+                   endif
+                end do
+             end do
+          endif
+       endif
+    endif
+
+    !===========================================
+    ! [D] Periodic box
+    !===========================================
+    if (j == 0) then
+       if (periodic_d(1)) then
+          if (sink_xp(ipart, 1) <  0.0_dp) sink_xp(ipart, 1) = sink_xp(ipart, 1) + bs1
+          if (sink_xp(ipart, 1) >= bs1   ) sink_xp(ipart, 1) = sink_xp(ipart, 1) - bs1
+       endif
+       if (periodic_d(2)) then
+          if (sink_xp(ipart, 2) <  0.0_dp) sink_xp(ipart, 2) = sink_xp(ipart, 2) + bs2
+          if (sink_xp(ipart, 2) >= bs2   ) sink_xp(ipart, 2) = sink_xp(ipart, 2) - bs2
+       endif
+       if (periodic_d(3)) then
+          if (sink_xp(ipart, 3) <  0.0_dp) sink_xp(ipart, 3) = sink_xp(ipart, 3) + bs3
+          if (sink_xp(ipart, 3) >= bs3   ) sink_xp(ipart, 3) = sink_xp(ipart, 3) - bs3
+       endif
+    endif
+  end subroutine sink_evolution_kernel
+
+  ! =========================================================================
+  !> Sink merger: set flag1 to huge(1) in the octs of level ilevel.
+  !> Mirrors the flag1 reset of sink_id_deposition in sink_merger.f90.
+  attributes(global) subroutine reset_sink_id_kernel(flag1, head_idx, num_octs)
+    implicit none
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    integer(kind=4), intent(in), value :: head_idx
+    integer(kind=4), intent(in), value :: num_octs
+
+    integer :: cell_idx, oct_idx, block_idx
+
+    block_idx = blockIdx%x - 1
+
+    ! Compute the oct idx
+    oct_idx = block_idx * blockDim%y + threadIdx%y - 1
+    if (oct_idx >= num_octs) return
+    oct_idx = head_idx + oct_idx
+
+    ! Compute the cell idx
+    cell_idx = threadIdx%x
+
+    flag1(cell_idx, oct_idx) = huge(1)
+
+  end subroutine reset_sink_id_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Sink merger: deposit the sink id into the TSC cells of every sink of
+  !> level ilevel, keeping the minimum id per cell. One thread per sink.
+  !> Mirrors sink_id_deposition in sink_merger.f90.
+  attributes(global) subroutine sink_id_deposit_kernel(flag1, &
+       & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+       & box_ckey_min_d, box_ckey_max_d, periodic_d, &
+       & head_idx, nsink_lev, ilevel, skip1, skip2, skip3, dx_loc)
+    implicit none
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    integer(kind=8), device :: hash_key_d(*)
+    integer(kind=4), device :: hash_val_d(*)
+    integer(kind=4), intent(in), value :: hash_size_d
+    integer(kind=4), device :: ckey_max_d(*)
+    integer(kind=8), device :: key_off_d(*)
+    integer(kind=4), intent(in), value :: ngridmax
+    integer(kind=4), device :: box_ckey_min_d(3,*)
+    integer(kind=4), device :: box_ckey_max_d(3,*)
+    logical, device :: periodic_d(3)
+    integer(kind=4), intent(in), value :: head_idx, nsink_lev, ilevel
+    real(kind=dp), intent(in), value :: skip1, skip2, skip3, dx_loc
+
+    integer :: ipart, j, igrid, icell, info, new_id
+    integer(kind=4) :: ckey(3)
+    real(kind=dp) :: xcen(3), xnei(3), w
+
+    ! Reset the collision pair counter (read by collect_collisions_kernel)
+    if (blockIdx%x == 1 .and. threadIdx%x == 1) npair_d = 0
+
+    ipart = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+    if (ipart > nsink_lev) return
+    ipart = head_idx + ipart - 1
+
+    ! Skip zero-mass sinks
+    if (sink_mp(ipart) <= 0.0_dp) return
+
+    xcen(1) = (sink_xp(ipart, 1) + skip1) / dx_loc
+    xcen(2) = (sink_xp(ipart, 2) + skip2) / dx_loc
+    xcen(3) = (sink_xp(ipart, 3) + skip3) / dx_loc
+
+    ! flag1 is 32-bit: the host checks that sink ids fit
+    new_id = int(sink_idp(ipart), kind=4)
+
+    do j = 0, 26
+       call sink_bspline_device(3, xcen, j, box_ckey_min_d, box_ckey_max_d, periodic_d, &
+            & ilevel, ckey, xnei, w)
+       if (w <= 0.0_dp) cycle
+       call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+            & ilevel, ckey, igrid, icell)
+       if (igrid <= 0 .or. igrid > ngridmax) cycle
+       info = atomicmin(flag1(icell, igrid), new_id)
+    end do
+  end subroutine sink_id_deposit_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Sink merger: for every sink of level ilevel, find the minimum sink id
+  !> deposited in its TSC cells. If it is smaller than its own id, append the
+  !> pair (id1,id2) to the collision list. One thread per sink.
+  !> Mirrors collect_collisions in sink_merger.f90.
+  attributes(global) subroutine collect_collisions_kernel(flag1, &
+       & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
+       & box_ckey_min_d, box_ckey_max_d, periodic_d, &
+       & head_idx, nsink_lev, ilevel, skip1, skip2, skip3, dx_loc)
+    implicit none
+    integer(kind=4), device :: flag1(1:twotondim,*)
+    integer(kind=8), device :: hash_key_d(*)
+    integer(kind=4), device :: hash_val_d(*)
+    integer(kind=4), intent(in), value :: hash_size_d
+    integer(kind=4), device :: ckey_max_d(*)
+    integer(kind=8), device :: key_off_d(*)
+    integer(kind=4), intent(in), value :: ngridmax
+    integer(kind=4), device :: box_ckey_min_d(3,*)
+    integer(kind=4), device :: box_ckey_max_d(3,*)
+    logical, device :: periodic_d(3)
+    integer(kind=4), intent(in), value :: head_idx, nsink_lev, ilevel
+    real(kind=dp), intent(in), value :: skip1, skip2, skip3, dx_loc
+
+    integer :: ipart, j, igrid, icell, k
+    integer :: my_id, neighbor_id, neighbor_id_min
+    integer(kind=4) :: ckey(3)
+    real(kind=dp) :: xcen(3), xnei(3), w
+
+    ipart = (blockIdx%x - 1) * blockDim%x + threadIdx%x
+    if (ipart > nsink_lev) return
+    ipart = head_idx + ipart - 1
+
+    ! Skip zero-mass sinks
+    if (sink_mp(ipart) <= 0.0_dp) return
+
+    my_id = int(sink_idp(ipart), kind=4)
+
+    xcen(1) = (sink_xp(ipart, 1) + skip1) / dx_loc
+    xcen(2) = (sink_xp(ipart, 2) + skip2) / dx_loc
+    xcen(3) = (sink_xp(ipart, 3) + skip3) / dx_loc
+
+    neighbor_id_min = huge(1)
+    do j = 0, 26
+       call sink_bspline_device(3, xcen, j, box_ckey_min_d, box_ckey_max_d, periodic_d, &
+            & ilevel, ckey, xnei, w)
+       if (w <= 0.0_dp) cycle
+       call get_cell_by_key(hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
+            & ilevel, ckey, igrid, icell)
+       if (igrid <= 0 .or. igrid > ngridmax) cycle
+       neighbor_id = flag1(icell, igrid)
+       if (neighbor_id < my_id .and. neighbor_id < neighbor_id_min) neighbor_id_min = neighbor_id
+    end do
+
+    ! Append the pair (pairs beyond ncollision_max are dropped)
+    if (neighbor_id_min < my_id) then
+       k = atomicadd(npair_d, 1) + 1
+       if (k <= ncollision_max) then
+          pair_id1_d(k) = neighbor_id_min
+          pair_id2_d(k) = my_id
+       endif
+    endif
+  end subroutine collect_collisions_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  !> Sink merger: deduplicate, filter, break chains and execute the mergers of
+  !> the collision list. One block: thread 0 runs the sequential pair logic,
+  !> all threads look up the sink index of the pairs. Mirrors steps 4-8 of
+  !> sink_merger in sink_merger.f90. No printout and no abort on the GPU:
+  !> pairs beyond ncollision_max are dropped, these sinks still overlap and
+  !> are merged at the next call.
+  attributes(global) subroutine merge_sinks_kernel(npart, dx_loc, factG, texp, &
+       & periodic_d, bs1, bs2, bs3)
+    implicit none
+    integer(kind=4), intent(in), value :: npart
+    real(kind=dp), intent(in), value :: dx_loc, factG, texp
+    logical, device :: periodic_d(3)
+    real(kind=dp), intent(in), value :: bs1, bs2, bs3
+
+    integer, shared :: s_n
+    integer :: i, k, n, ipart, idim, j1, j2, tmp1, tmp2
+    logical :: swapped
+    real(kind=dp) :: m1, m2, total_mass, separation, vel_squared, binding_criteria
+    real(kind=dp) :: bs(3), dpos(3), rel(3), com_position(3), com_velocity(3)
+
+    bs(1) = bs1; bs(2) = bs2; bs(3) = bs3
+
+    ! Step 4: Deduplicate collision list (sort by id1 then id2, keep first id1)
+    if (threadIdx%x == 1) then
+       n = min(npair_d, ncollision_max)
+       do i = n, 1, -1
+          swapped = .false.
+          do k = 1, i - 1
+             if (pair_id1_d(k) > pair_id1_d(k+1) .or. &
+                  & (pair_id1_d(k) == pair_id1_d(k+1) .and. pair_id2_d(k) > pair_id2_d(k+1))) then
+                tmp1 = pair_id1_d(k); tmp2 = pair_id2_d(k)
+                pair_id1_d(k) = pair_id1_d(k+1); pair_id2_d(k) = pair_id2_d(k+1)
+                pair_id1_d(k+1) = tmp1; pair_id2_d(k+1) = tmp2
+                swapped = .true.
+             endif
+          end do
+          if (.not. swapped) exit
+       end do
+       k = 0
+       do i = 1, n
+          if (i > 1) then
+             if (pair_id1_d(i) == pair_id1_d(i-1)) cycle
+          endif
+          k = k + 1
+          pair_id1_d(k) = pair_id1_d(i)
+          pair_id2_d(k) = pair_id2_d(i)
+          pair_idx1_d(k) = 0
+          pair_idx2_d(k) = 0
+       end do
+       s_n = k
+    endif
+    call syncthreads()
+    if (s_n == 0) return
+
+    ! Step 5: Find the sink index of both sinks of every pair (all levels)
+    do ipart = threadIdx%x, npart, blockDim%x
+       do i = 1, s_n
+          if (pair_id1_d(i) == sink_idp(ipart)) pair_idx1_d(i) = ipart
+          if (pair_id2_d(i) == sink_idp(ipart)) pair_idx2_d(i) = ipart
+       end do
+    end do
+    call syncthreads()
+    if (threadIdx%x /= 1) return
+
+    ! Step 6: Filter collisions based on adopted merging criteria
+    do i = 1, s_n
+       j1 = pair_idx1_d(i); j2 = pair_idx2_d(i)
+       if (j1 <= 0 .or. j2 <= 0) then
+          pair_id1_d(i) = 0; pair_id2_d(i) = 0; cycle
+       endif
+       if (sink_mp(j1) <= 0.0_dp .or. sink_mp(j2) <= 0.0_dp) then
+          pair_id1_d(i) = 0; pair_id2_d(i) = 0; cycle
+       endif
+       ! Use the minimum-image convention across periodic boundaries
+       do idim = 1, 3
+          dpos(idim) = sink_xp(j1, idim) - sink_xp(j2, idim)
+          if (periodic_d(idim)) then
+             if (dpos(idim) >  0.5_dp*bs(idim)) dpos(idim) = dpos(idim) - bs(idim)
+             if (dpos(idim) < -0.5_dp*bs(idim)) dpos(idim) = dpos(idim) + bs(idim)
+          endif
+       end do
+       separation = sqrt(dpos(1)**2 + dpos(2)**2 + dpos(3)**2)
+       if (separation < dx_loc) then
+          vel_squared = (sink_vp(j1,1) - sink_vp(j2,1))**2 + (sink_vp(j1,2) - sink_vp(j2,2))**2 &
+               & + (sink_vp(j1,3) - sink_vp(j2,3))**2
+          binding_criteria = factG * (sink_mp(j1) + sink_mp(j2)) / dx_loc * (1.0_dp - (separation/dx_loc)**2)
+          if (vel_squared >= binding_criteria) then
+             pair_id1_d(i) = 0; pair_id2_d(i) = 0
+          endif
+       else
+          pair_id1_d(i) = 0; pair_id2_d(i) = 0
+       endif
+    end do
+
+    ! Step 7: Break merger chains (defer conflicting pairs to next call)
+    do i = 1, s_n
+       if (pair_id1_d(i) == 0) cycle
+       do k = 1, i - 1
+          if (pair_id1_d(k) /= 0 .and. pair_id2_d(k) == pair_id1_d(i)) then
+             pair_id1_d(i) = 0; pair_id2_d(i) = 0
+             exit
+          endif
+       end do
+    end do
+
+    ! Step 8: Execute mergers. Each sink is in at most one valid pair, so the
+    ! sink arrays can be updated in place.
+    do i = 1, s_n
+       if (pair_id1_d(i) == 0) cycle
+       j1 = pair_idx1_d(i); j2 = pair_idx2_d(i)
+       m1 = sink_mp(j1); m2 = sink_mp(j2)
+       total_mass = m1 + m2
+       ! Center of mass from the minimum-image offset of sink 2, wrapped back into the box
+       do idim = 1, 3
+          rel(idim) = sink_xp(j2, idim) - sink_xp(j1, idim)
+          if (periodic_d(idim)) then
+             if (rel(idim) >  0.5_dp*bs(idim)) rel(idim) = rel(idim) - bs(idim)
+             if (rel(idim) < -0.5_dp*bs(idim)) rel(idim) = rel(idim) + bs(idim)
+          endif
+          com_position(idim) = sink_xp(j1, idim) + m2 * rel(idim) / total_mass
+          if (periodic_d(idim)) then
+             if (com_position(idim) <  0.0_dp  ) com_position(idim) = com_position(idim) + bs(idim)
+             if (com_position(idim) >= bs(idim)) com_position(idim) = com_position(idim) - bs(idim)
+          endif
+          com_velocity(idim) = (m1 * sink_vp(j1, idim) + m2 * sink_vp(j2, idim)) / total_mass
+       end do
+       sink_mp(j1) = total_mass
+       sink_mp(j2) = 0.0_dp
+       do idim = 1, 3
+          sink_xp(j1, idim) = com_position(idim); sink_xp(j2, idim) = com_position(idim)
+          sink_vp(j1, idim) = com_velocity(idim); sink_vp(j2, idim) = com_velocity(idim)
+       end do
+       sink_tm(j2) = texp
+       sink_idm(j2) = pair_id1_d(i)
+    end do
+  end subroutine merge_sinks_kernel
+  ! =========================================================================
+
+  ! =========================================================================
+  ! Host Driver: sink accretion, friction, AGN feedback and periodic wrap
+  ! for all sinks of level ilevel. Mirrors sink_evolution in sink_evolution.f90.
+  ! =========================================================================
+  subroutine gpu_sink_evolution(sim, ilevel, macc_loc)
+    use nvtx
+    use constants, only: pi, twopi, factG_in_cgs, mH, sigma_T, c_cgs
+    use ramses_commons, only: ramses_t
+    use gpu_runner, only: hash_key, hash_val, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic
+    implicit none
+    type(ramses_t) :: sim
+    integer, intent(in) :: ilevel
+    real(kind=8), intent(out) :: macc_loc
+
+    real(kind=8) :: scale_nH, scale_T2, scale_l, scale_d, scale_t, scale_v
+    real(kind=8) :: factG, lambda_sonic, edd_fac, dx_loc, vol_loc
+    real(kind=8) :: jet_angle, tan_theta, c_code
+    real(kind=dp), device :: macc_loc_d
+    real(kind=dp) :: macc_loc_dp
+    integer :: head_idx, nsink_lev, nBHnei
+
+    associate(r=>sim%r, g=>sim%g, m=>sim%m, p=>sim%sink)
+
+    macc_loc = 0.0d0
+    head_idx = p%headp(ilevel)
+    nsink_lev = p%tailp(ilevel) - head_idx + 1
+    if (nsink_lev <= 0) return
+
+    if (g%myid == 1 .and. r%verbose) write(*,*) 'Entering gpu_sink_evolution...'
+
+    ! Conversion factor from user units to cgs units
+    call units(r, g, scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
+
+    ! Gravitational constant
+    factG = 1d0
+    if (r%cosmo) factG = 3d0/4d0/twopi*g%omega_m*g%aexp
+
+    ! Bondi sonic constant
+    if (r%use_bondi_lambda) then
+       if (abs(r%gamma - 1).le.0.01) then
+          lambda_sonic = 0.25d0*exp(1.5d0)
+       else if (abs(r%gamma - 5.0d0/3.0d0).le.0.01) then
+          lambda_sonic = 0.25d0
+       else
+          lambda_sonic = 0.5d0**((r%gamma + 1)/(2d0*(r%gamma - 1))) &
+               & * (0.25d0*(5d0-3d0*r%gamma))**(-(5d0-3d0*r%gamma)/(2d0*(r%gamma - 1)))
+       end if
+    else
+       lambda_sonic = 1.0d0
+    end if
+
+    ! Eddington rate per unit sink mass (code units)
+    edd_fac = 4.0d0 * pi * factG_in_cgs * mH / (0.1d0 * sigma_T * c_cgs) * scale_t
+
+    ! Mesh spacing in that level
+    dx_loc = r%boxlen/2**ilevel
+    vol_loc = dx_loc**ndim
+
+    ! Number of cells within the B-spline region
+    nBHnei = r%sink_b_spline_order**ndim
+
+    ! AGN jet geometry safety net and speed of light in code units
+    jet_angle = max(tiny(0.0d0), r%agn_jet_opening_angle)
+    jet_angle = min(jet_angle, 180d0)
+    tan_theta = tan(pi/180d0*jet_angle/2) ! tangent of half of the opening angle
+    c_code = c_cgs/scale_v
+
+    macc_loc_d = 0.0_dp
+
+    call nvtxStartRange("GPU Sink Evolution Kernel", color=5)!red
+    call sink_evolution_kernel<<<nsink_lev, 256>>>( &
+         & hash_key, hash_val, m%hash_size, ckey_max, key_off, m%ngridmax, &
+         & box_ckey_min, box_ckey_max, periodic, &
+         & head_idx, ilevel, r%sink_b_spline_order, nBHnei, r%accretion_type, &
+         & real(m%skip(1),kind=dp), real(m%skip(2),kind=dp), real(m%skip(3),kind=dp), &
+         & real(dx_loc,kind=dp), real(vol_loc,kind=dp), real(g%dtnew(ilevel),kind=dp), real(g%t,kind=dp), &
+         & real(factG,kind=dp), real(lambda_sonic,kind=dp), real(edd_fac,kind=dp), &
+         & real(r%eddington_cap,kind=dp), real(r%eddington_floor,kind=dp), &
+         & real(r%t_start_black_hole,kind=dp), real(r%manual_accretion_rate,kind=dp), &
+         & real(r%sink_density_threshold,kind=dp), &
+         & real(r%sink_relevance_threshold,kind=dp), &
+         & real(r%gamma,kind=dp), real(r%smallr,kind=dp), real(r%smallc,kind=dp), &
+         & real(r%acc_sink_boost**(-2d0/3d0),kind=dp), &
+         & r%use_local_bondi_rate, r%bondi_use_vrel, r%bondi_use_gas_mass, r%use_rho_inf, &
+         & r%mass_weighting, r%momentum_conserving, r%fix_sink_mass, p%static, r%drag_sink, &
+         & r%agn, r%agn_use_mass_weighting, r%agn_feedback_radius, real(tan_theta,kind=dp), &
+         & real(r%agn_fbk_mode_switch_threshold,kind=dp), real(r%epsilon_rad,kind=dp), &
+         & real(r%epsilon_quasar,kind=dp), real(r%epsilon_radio,kind=dp), &
+         & real(r%momentum_boost,kind=dp), real(c_code,kind=dp), &
+         & real(r%box_size(1),kind=dp), real(r%box_size(2),kind=dp), real(r%box_size(3),kind=dp), &
+         & macc_loc_d)
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    ! Copy back the total accreted mass from device to host
+    macc_loc_dp = macc_loc_d
+    macc_loc = real(macc_loc_dp, kind=8)
+
+    end associate
+  end subroutine gpu_sink_evolution
+
+  ! =========================================================================
+  ! Host Driver: sink merger for all sinks of level ilevel. Mirrors
+  ! sink_merger in sink_merger.f90. Nothing is copied back to the host:
+  ! no printout and no abort on the GPU.
+  ! =========================================================================
+  subroutine gpu_sink_merger(sim, ilevel)
+    use nvtx
+    use constants, only: twopi
+    use ramses_commons, only: ramses_t
+    use gpu_runner, only: flag1, hash_key, hash_val, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic
+    implicit none
+    type(ramses_t) :: sim
+    integer, intent(in) :: ilevel
+
+    integer(kind=4) :: head_idx, num_octs, nsink_lev
+    integer :: threadsX_per_block, threadsY_per_block, num_threads, num_blocks
+    real(kind=8) :: dx_loc, factG
+
+    associate(r=>sim%r, g=>sim%g, m=>sim%m, p=>sim%sink)
+
+    nsink_lev = p%tailp(ilevel) - p%headp(ilevel) + 1
+    if (nsink_lev <= 0) return
+
+    if (g%myid == 1 .and. r%verbose) write(*,*) 'Entering gpu_sink_merger...'
+
+    ! flag1 is 32-bit: make sure all sink ids fit
+    if (p%npart_tot > int(huge(1), kind=8)) then
+       write(*,*) 'gpu_sink_merger: sink id exceeds 32-bit range'
+       stop
+    endif
+
+    ! Mesh spacing in that level
+    dx_loc = r%boxlen/2**ilevel
+
+    ! Gravitational constant
+    factG = 1d0
+    if (r%cosmo) factG = 3d0/4d0/twopi*g%omega_m*g%aexp
+
+    ! Step 1a: Set flag1 to max possible index
+    head_idx = m%head(ilevel)
+    num_octs = m%noct(ilevel)
+    threadsX_per_block = 8
+    threadsY_per_block = 16
+    num_blocks = (num_octs + threadsY_per_block - 1) / threadsY_per_block
+    if (num_octs > 0) then
+       call nvtxStartRange("GPU Sink ID Reset", color=5)!red
+       call reset_sink_id_kernel<<<num_blocks, dim3(threadsX_per_block,threadsY_per_block,1)>>>(flag1, head_idx, num_octs)
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+    endif
+
+    head_idx = p%headp(ilevel)
+    num_threads = 128
+    num_blocks = (nsink_lev + num_threads - 1) / num_threads
+
+    ! Step 1b: Deposit sink IDs to grid (also resets the pair counter)
+    call nvtxStartRange("GPU Sink ID Deposit", color=5)!red
+    call sink_id_deposit_kernel<<<num_blocks, num_threads>>>(flag1, &
+         & hash_key, hash_val, m%hash_size, ckey_max, key_off, m%ngridmax, &
+         & box_ckey_min, box_ckey_max, periodic, &
+         & head_idx, nsink_lev, ilevel, &
+         & real(m%skip(1),kind=dp), real(m%skip(2),kind=dp), real(m%skip(3),kind=dp), &
+         & real(dx_loc,kind=dp))
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    ! Step 2: Collect local collisions
+    call nvtxStartRange("GPU Sink Collisions", color=5)!red
+    call collect_collisions_kernel<<<num_blocks, num_threads>>>(flag1, &
+         & hash_key, hash_val, m%hash_size, ckey_max, key_off, m%ngridmax, &
+         & box_ckey_min, box_ckey_max, periodic, &
+         & head_idx, nsink_lev, ilevel, &
+         & real(m%skip(1),kind=dp), real(m%skip(2),kind=dp), real(m%skip(3),kind=dp), &
+         & real(dx_loc,kind=dp))
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    ! Steps 4-8: Deduplicate, filter, break chains and execute mergers
+    call nvtxStartRange("GPU Sink Merge", color=5)!red
+    call merge_sinks_kernel<<<1, 256>>>(p%npart, real(dx_loc,kind=dp), real(factG,kind=dp), &
+         & real(g%texp,kind=dp), periodic, &
+         & real(r%box_size(1),kind=dp), real(r%box_size(2),kind=dp), real(r%box_size(3),kind=dp))
+    call GPU_Error_Check(__FILE__, __LINE__)
+    call nvtxEndRange()
+
+    end associate
+  end subroutine gpu_sink_merger
+
+end module sink_device

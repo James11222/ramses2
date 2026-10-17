@@ -8,7 +8,8 @@ module clump_device
   use gpu_runner, only: grid, father, flag1, flag2, rho, nref, gpu_scan, hash_key, hash_val, &
        uold, f, periodic, box_ckey_min, box_ckey_max, ckey_max, key_off, d_skip, &
        sink_xp, sink_levelp, sink_pid, sink_vp, sink_fp, sink_mp, sink_tp, sink_idp, swap_local, &
-       prefix_sum
+       prefix_sum, box_size, xp, vp, mp, star_xp, star_vp, star_mp, &
+       sink_jp, sink_tm, sink_idm, pid, hid, star_pid, star_hid, sink_hid
   use part_device, only: dtnew_part_d
   implicit none
 
@@ -89,8 +90,8 @@ contains
 
     integer :: ntestmax, nclumpmax
 
-    ntestmax = sim%m%ngridmax/10
-    nclumpmax = sim%m%ngridmax/100
+    ntestmax = sim%m%ngridmax
+    nclumpmax = sim%m%ngridmax/10
 
     ! Allocate test cell arrays
     if (.not. allocated(grid_d))           allocate(grid_d(1:ntestmax))
@@ -177,6 +178,154 @@ contains
     if (allocated(phi_clump_d))      deallocate(phi_clump_d)
     if (allocated(nsink_d))          deallocate(nsink_d)
   end subroutine gpu_deallocate_clump
+
+  ! =========================================================================
+  ! Reset clump counters after GPU sink formation.
+  ! Device clump arrays are allocated once at startup and never deallocated.
+  ! =========================================================================
+  subroutine gpu_reset_clump(sim)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+
+    sim%c%ntest = 0
+    sim%c%ntest_tot = 0
+    sim%c%npeak = 0
+    sim%c%npeak_tot = 0
+
+    ! Deallocate host peak arrays filled by gpu_clump_to_host
+    if (allocated(sim%c%peak_pos)) then
+       deallocate(sim%c%npeak_cum)
+       deallocate(sim%c%peak_cell, sim%c%peak_grid, sim%c%peak_level, sim%c%max_dens)
+       deallocate(sim%c%saddle_dens, sim%c%saddle_nbor, sim%c%lev_peak, sim%c%new_peak)
+       deallocate(sim%c%relevance, sim%c%tidal_dens)
+       deallocate(sim%c%peak_pos, sim%c%peak_vel, sim%c%peak_acc, sim%c%peak_com)
+       deallocate(sim%c%min_dens, sim%c%n_cells, sim%c%clump_mass, sim%c%clump_vol, sim%c%clump_rad)
+       deallocate(sim%c%npart, sim%c%particle_mass, sim%c%ind_final)
+       if (allocated(sim%c%ind_halo)) deallocate(sim%c%ind_halo, sim%c%halo_mass, sim%c%mass_bin, sim%c%phi)
+       if (allocated(sim%c%nsink)) deallocate(sim%c%nsink, sim%c%form_sink)
+    endif
+
+    ! Deallocate host particle peak and halo ids filled by gpu_clump_to_host
+    if (allocated(sim%p%pid))    deallocate(sim%p%pid, sim%p%hid)
+    if (allocated(sim%star%pid)) deallocate(sim%star%pid, sim%star%hid)
+    if (allocated(sim%sink%pid)) deallocate(sim%sink%pid, sim%sink%hid)
+  end subroutine gpu_reset_clump
+
+  ! =========================================================================
+  ! Copy GPU clump finder results to the host for output (single rank).
+  ! Host arrays are deallocated in gpu_reset_clump.
+  ! =========================================================================
+  subroutine gpu_clump_to_host(sim)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+
+    integer :: npeak
+    real(kind=dp), allocatable, dimension(:,:) :: tmp
+
+    npeak = sim%c%npeak
+    if (npeak <= 0) return
+
+    associate(c=>sim%c, m=>sim%m)
+
+    ! Peak counts (single rank)
+    allocate(c%npeak_cum(0:sim%g%ncpu))
+    c%npeak_cum(0) = 0
+    c%npeak_cum(1) = npeak
+    c%npeak_max = npeak
+
+    ! Peak-patch properties
+    allocate(c%peak_cell(1:npeak));     c%peak_cell     = peak_cell_d(1:npeak)
+    allocate(c%peak_grid(1:npeak));     c%peak_grid     = peak_grid_d(1:npeak)
+    allocate(c%peak_level(1:npeak));    c%peak_level    = peak_level_d(1:npeak)
+    allocate(c%max_dens(1:npeak));      c%max_dens      = max_dens_d(1:npeak)
+    allocate(c%saddle_dens(1:npeak));   c%saddle_dens   = saddle_dens_d(1:npeak)
+    allocate(c%saddle_nbor(1:npeak));   c%saddle_nbor   = saddle_nbor_d(1:npeak)
+    allocate(c%lev_peak(1:npeak));      c%lev_peak      = lev_peak_d(1:npeak)
+    allocate(c%new_peak(1:npeak));      c%new_peak      = new_peak_d(1:npeak)
+    allocate(c%relevance(1:npeak));     c%relevance     = relevance_d(1:npeak)
+    allocate(c%tidal_dens(1:npeak));    c%tidal_dens    = tidal_dens_d(1:npeak)
+    allocate(c%min_dens(1:npeak));      c%min_dens      = min_dens_d(1:npeak)
+    allocate(c%n_cells(1:npeak));       c%n_cells       = n_cells_d(1:npeak)
+    allocate(c%clump_mass(1:npeak));    c%clump_mass    = clump_mass_d(1:npeak)
+    allocate(c%clump_vol(1:npeak));     c%clump_vol     = clump_vol_d(1:npeak)
+    allocate(c%clump_rad(1:npeak));     c%clump_rad     = clump_rad_d(1:npeak)
+    allocate(c%npart(1:npeak));         c%npart         = npart_d(1:npeak)
+    allocate(c%particle_mass(1:npeak)); c%particle_mass = particle_mass_d(1:npeak)
+
+    ! Device vectors are (ndim,npeak), host ones are (npeak,ndim)
+    allocate(tmp(1:ndim, 1:npeak))
+    allocate(c%peak_pos(1:npeak, 1:ndim)); tmp = peak_pos_d(:, 1:npeak); c%peak_pos = transpose(tmp)
+    allocate(c%peak_vel(1:npeak, 1:ndim)); tmp = peak_vel_d(:, 1:npeak); c%peak_vel = transpose(tmp)
+    allocate(c%peak_acc(1:npeak, 1:ndim)); tmp = peak_acc_d(:, 1:npeak); c%peak_acc = transpose(tmp)
+    allocate(c%peak_com(1:npeak, 1:ndim)); tmp = peak_com_d(:, 1:npeak); c%peak_com = transpose(tmp)
+    deallocate(tmp)
+
+    ! Final clump ids (computed by trim_clumps)
+    allocate(c%ind_final(1:npeak)); c%ind_final = ind_final_d(1:npeak)
+
+    ! Halo-patch properties
+    if (c%saddle_threshold > 0) then
+       allocate(c%ind_halo(1:npeak));  c%ind_halo  = ind_halo_d(1:npeak)
+       allocate(c%halo_mass(1:npeak)); c%halo_mass = halo_mass_d(1:npeak)
+       ! Device profiles are (nbin,npeak), host ones are (npeak,nbin)
+       allocate(tmp(1:nbin, 1:npeak))
+       allocate(c%mass_bin(1:npeak, 1:nbin)); tmp = mass_bin_d(:, 1:npeak);  c%mass_bin = transpose(tmp)
+       allocate(c%phi(1:npeak, 1:nbin));      tmp = phi_clump_d(:, 1:npeak); c%phi      = transpose(tmp)
+       deallocate(tmp)
+    endif
+
+    ! Sink counts per peak
+    if (sim%r%sink) then
+       allocate(c%nsink(1:npeak));     c%nsink     = nsink_d(1:npeak)
+       allocate(c%form_sink(1:npeak)); c%form_sink = 0
+    endif
+
+    ! Mesh fields: halo id (flag1), peak id (flag2) and smoothed density
+    m%flag1 = flag1
+    m%flag2 = flag2
+#ifdef GRAV
+    m%rho   = rho
+#endif
+
+    ! Particle peak and halo ids (without halo merging, each clump is its own halo)
+    if (sim%r%part) then
+       allocate(sim%p%pid(1:sim%p%npart), sim%p%hid(1:sim%p%npart))
+       if (sim%p%npart > 0) then
+          sim%p%pid = pid(1:sim%p%npart)
+          if (c%saddle_threshold > 0) then
+             sim%p%hid = hid(1:sim%p%npart)
+          else
+             sim%p%hid = sim%p%pid
+          endif
+       endif
+    endif
+    if (sim%r%star) then
+       allocate(sim%star%pid(1:sim%star%npart), sim%star%hid(1:sim%star%npart))
+       if (sim%star%npart > 0) then
+          sim%star%pid = star_pid(1:sim%star%npart)
+          if (c%saddle_threshold > 0) then
+             sim%star%hid = star_hid(1:sim%star%npart)
+          else
+             sim%star%hid = sim%star%pid
+          endif
+       endif
+    endif
+    if (sim%r%sink) then
+       allocate(sim%sink%pid(1:sim%sink%npart), sim%sink%hid(1:sim%sink%npart))
+       if (sim%sink%npart > 0) then
+          sim%sink%pid = sink_pid(1:sim%sink%npart)
+          if (c%saddle_threshold > 0) then
+             sim%sink%hid = sink_hid(1:sim%sink%npart)
+          else
+             sim%sink%hid = sim%sink%pid
+          endif
+       endif
+    endif
+
+    end associate
+  end subroutine gpu_clump_to_host
 
   ! =========================================================================
   ! CUDA Kernel: Save raw density to nref for levelmin
@@ -978,6 +1127,7 @@ contains
 
     if (action_code == 1) then ! 'relevance'
        alive_d(ipeak) = 1
+       lev_peak_d(ipeak) = -1
     else if (action_code == 2) then ! 'saddleden'
        if (relevance_d(ipeak) > relevance_threshold) then
           alive_d(ipeak) = 1
@@ -1107,6 +1257,24 @@ contains
        endif
     endif
   end subroutine update_alive_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Count surviving (alive) peaks after merging
+  ! =========================================================================
+  attributes(global) subroutine count_alive_kernel(alive_d, npeak, nalive)
+    integer, device :: alive_d(*)
+    integer, value :: npeak
+    integer, device :: nalive
+
+    integer :: ipeak, gid, tid, info
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    if (alive_d(ipeak) > 0) info = atomicadd(nalive, 1)
+  end subroutine count_alive_kernel
 
   ! =========================================================================
   ! CUDA Kernels: Post-merge relevance processing
@@ -1261,8 +1429,8 @@ contains
 
     integer :: action_code
     integer :: block_size, grid_size_peaks, grid_size_test
-    integer, device :: nmove_d, nzero_d
-    integer :: nmove_h, nzero_h, idepth, iter, ilev
+    integer, device :: nmove_d, nzero_d, nalive_d
+    integer :: nmove_h, nzero_h, nsurvive_h, idepth, iter, ilev
 
     if (npeak == 0) return
 
@@ -1317,6 +1485,15 @@ contains
        idepth = idepth + 1
     end do
 
+    ! Count surviving peaks
+    nalive_d = 0
+    call count_alive_kernel<<<grid_size_peaks, block_size>>>(alive_d, npeak, nalive_d)
+    nsurvive_h = nalive_d
+    if (sim%g%myid == 1) then
+       if (action == 'relevance') write(*,'(" Found",I12,"  relevant peaks")')nsurvive_h
+       if (action == 'saddleden') write(*,'(" Found",I12,"  halos")')nsurvive_h
+    endif
+
     sim%c%merge_levelmax = idepth - 2
 
     ! Post-processing
@@ -1353,13 +1530,14 @@ contains
   ! CUDA Kernel: Initialize peak position, velocity, and acceleration
   ! =========================================================================
   attributes(global) subroutine init_peak_properties_kernel( &
-       & peak_pos_d, peak_vel_d, peak_acc_d, peak_grid_d, peak_cell_d, peak_level_d, &
-       & min_dens_d, n_cells_d, clump_mass_d, clump_vol_d, &
+       & peak_pos_d, peak_vel_d, peak_acc_d, peak_com_d, peak_grid_d, peak_cell_d, peak_level_d, &
+       & min_dens_d, n_cells_d, clump_mass_d, clump_vol_d, npart_d, &
        & uold, f, grid, boxlen, skip, npeak, rtype)
     real(kind=dp), device :: peak_pos_d(1:ndim, *), peak_vel_d(1:ndim, *), peak_acc_d(1:ndim, *)
+    real(kind=dp), device :: peak_com_d(1:ndim, *)
     integer, device :: peak_grid_d(*), peak_cell_d(*), peak_level_d(*)
     real(kind=dp), device :: min_dens_d(*), clump_mass_d(*), clump_vol_d(*)
-    integer, device :: n_cells_d(*)
+    integer, device :: n_cells_d(*), npart_d(*)
     real(kind=dp), device :: uold(1:twotondim, 1:nvar, *)
     real(kind=dp), device :: f(1:twotondim, 1:3, *)
     type(oct), device :: grid(*)
@@ -1378,6 +1556,7 @@ contains
     n_cells_d(ipeak) = 0
     clump_mass_d(ipeak) = 0.0d0
     clump_vol_d(ipeak) = 0.0d0
+    npart_d(ipeak) = 0
 
     ilevel = peak_level_d(ipeak)
     igrid = peak_grid_d(ipeak)
@@ -1389,12 +1568,14 @@ contains
     xcell(3) = (2*grid(igrid)%ckey(3) + MOD((ind-1)/4, 2) + 0.5d0) * dx_loc - skip(3)
 
     peak_pos_d(1:ndim, ipeak) = xcell(1:ndim)
+    peak_com_d(1:ndim, ipeak) = 0.0d0
     peak_vel_d(1:ndim, ipeak) = 0.0d0
     peak_acc_d(1:ndim, ipeak) = 0.0d0
 
 #ifdef HYDRO
     if (rtype == 4) then
        peak_vel_d(1:ndim, ipeak) = uold(ind, 2:ndim+1, igrid) / uold(ind, 1, igrid)
+       peak_com_d(1:ndim, ipeak) = xcell(1:ndim)
     endif
 #endif
 #ifdef GRAV
@@ -1484,8 +1665,8 @@ contains
 
     ! 1. Launch peak properties initialization
     call init_peak_properties_kernel<<<grid_size_peaks, block_size>>>( &
-         & peak_pos_d, peak_vel_d, peak_acc_d, peak_grid_d, peak_cell_d, peak_level_d, &
-         & min_dens_d, n_cells_d, clump_mass_d, clump_vol_d, &
+         & peak_pos_d, peak_vel_d, peak_acc_d, peak_com_d, peak_grid_d, peak_cell_d, peak_level_d, &
+         & min_dens_d, n_cells_d, clump_mass_d, clump_vol_d, npart_d, &
          & uold, f, grid, sim%r%boxlen, d_skip, npeak, rtype)
 
     ! 2. Accumulate properties from cells
@@ -1499,6 +1680,832 @@ contains
   end subroutine gpu_compute_clump_properties
 
   ! =========================================================================
+  ! CUDA Kernel: Initialize particle-based peak properties
+  ! =========================================================================
+  attributes(global) subroutine init_particle_properties_kernel( &
+       & peak_com_d, peak_vel_d, particle_mass_d, npart_d, npeak)
+    real(kind=dp), device :: peak_com_d(1:ndim, *), peak_vel_d(1:ndim, *), particle_mass_d(*)
+    integer, device :: npart_d(*)
+    integer, value :: npeak
+
+    integer :: ipeak, gid, tid
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    peak_com_d(1:ndim, ipeak) = 0.0d0
+    peak_vel_d(1:ndim, ipeak) = 0.0d0
+    particle_mass_d(ipeak) = 0.0d0
+    npart_d(ipeak) = 0
+  end subroutine init_particle_properties_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Accumulate particle mass, momentum and position into peaks
+  ! =========================================================================
+  attributes(global) subroutine particle_clump_properties_kernel( &
+       & xp_d, vp_d, mp_d, flag2, peak_pos_d, peak_level_d, &
+       & peak_com_d, peak_vel_d, particle_mass_d, npart_d, periodic, box_size, &
+       & hash_key, hash_val, hash_size, boxlen, ilevel, head_part, num_parts, leading)
+    integer(kind=8), value :: leading
+    real(kind=dp), device :: xp_d(*), vp_d(*), mp_d(*)
+    integer, device :: flag2(1:twotondim, *)
+    real(kind=dp), device :: peak_pos_d(1:ndim, *)
+    integer, device :: peak_level_d(*)
+    real(kind=dp), device :: peak_com_d(1:ndim, *), peak_vel_d(1:ndim, *), particle_mass_d(*)
+    integer, device :: npart_d(*)
+    logical, device :: periodic(3)
+    real(kind=8), device :: box_size(3)
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer, value :: hash_size, ilevel, head_part, num_parts
+    real(kind=dp), value :: boxlen
+
+    integer :: ipart, gid, tid, idim, ipeak, info
+    real(kind=dp) :: x(1:ndim), xpart(1:ndim), r2, dx_loc, core_radius, info_dp
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > num_parts) return
+
+    ! Particle of level ilevel (headp..tailp list, as on the CPU)
+    ipart = head_part + gid - 1
+
+    do idim = 1, ndim
+       x(idim) = xp_d(ipart + (idim-1)*leading)
+    end do
+    ipeak = particle_peak_id_device(x, ilevel, boxlen, flag2, &
+         & hash_key, hash_val, hash_size)
+    if (ipeak == 0) return
+
+    ! Compute distance to peak cell center
+    r2 = 0.0d0
+    do idim = 1, ndim
+       xpart(idim) = x(idim) - peak_pos_d(idim, ipeak)
+       ! In case of periodic boundaries
+       if (periodic(idim)) then
+          if (xpart(idim) >  box_size(idim)*0.5d0) xpart(idim) = xpart(idim) - box_size(idim)
+          if (xpart(idim) < -box_size(idim)*0.5d0) xpart(idim) = xpart(idim) + box_size(idim)
+       endif
+       r2 = r2 + xpart(idim)**2
+    end do
+
+    ! Keep only particles within 2 peak cells
+    dx_loc = boxlen / (2**peak_level_d(ipeak))
+    core_radius = 2.0d0 * dx_loc
+    if (r2 <= core_radius**2) then
+       do idim = 1, ndim
+          info_dp = atomicadd(peak_com_d(idim, ipeak), mp_d(ipart) * xpart(idim))
+          info_dp = atomicadd(peak_vel_d(idim, ipeak), mp_d(ipart) * vp_d(ipart + (idim-1)*leading))
+       end do
+       info_dp = atomicadd(particle_mass_d(ipeak), mp_d(ipart))
+       info = atomicadd(npart_d(ipeak), 1)
+    endif
+  end subroutine particle_clump_properties_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Finalize particle-based peak properties
+  ! =========================================================================
+  attributes(global) subroutine finalize_particle_properties_kernel( &
+       & peak_com_d, peak_vel_d, peak_pos_d, particle_mass_d, periodic, box_size, npeak)
+    real(kind=dp), device :: peak_com_d(1:ndim, *), peak_vel_d(1:ndim, *), peak_pos_d(1:ndim, *)
+    real(kind=dp), device :: particle_mass_d(*)
+    logical, device :: periodic(3)
+    real(kind=8), device :: box_size(3)
+    integer, value :: npeak
+
+    integer :: ipeak, gid, tid, idim
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    ! Compute specific quantities
+    if (particle_mass_d(ipeak) > 0.0d0) then
+       peak_vel_d(1:ndim, ipeak) = peak_vel_d(1:ndim, ipeak) / particle_mass_d(ipeak)
+       peak_com_d(1:ndim, ipeak) = peak_com_d(1:ndim, ipeak) / particle_mass_d(ipeak)
+    endif
+    peak_com_d(1:ndim, ipeak) = peak_com_d(1:ndim, ipeak) + peak_pos_d(1:ndim, ipeak)
+    ! Periodic boundary conditions
+    do idim = 1, ndim
+       if (periodic(idim)) then
+          if (peak_com_d(idim, ipeak) <  0.0d0)          peak_com_d(idim, ipeak) = peak_com_d(idim, ipeak) + box_size(idim)
+          if (peak_com_d(idim, ipeak) >= box_size(idim)) peak_com_d(idim, ipeak) = peak_com_d(idim, ipeak) - box_size(idim)
+       endif
+    end do
+  end subroutine finalize_particle_properties_kernel
+
+  ! =========================================================================
+  ! Host Driver: Compute particle-based clump properties on GPU
+  ! =========================================================================
+  subroutine gpu_particle_clump_properties(sim, ptype, npeak)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+    integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars
+    integer, intent(in) :: npeak
+
+    integer :: block_size, grid_size_peaks, grid_size_part, ilevel, num_parts
+
+    if (npeak == 0) return
+
+    block_size = 256
+    grid_size_peaks = (npeak + block_size - 1) / block_size
+
+    ! 1. Reset particle-based peak properties
+    call init_particle_properties_kernel<<<grid_size_peaks, block_size>>>( &
+         & peak_com_d, peak_vel_d, particle_mass_d, npart_d, npeak)
+
+    ! 2. Accumulate particle contributions
+    if (ptype == 1 .and. sim%p%npart > 0) then
+       do ilevel = sim%r%levelmin, sim%r%nlevelmax
+          num_parts = sim%p%tailp(ilevel) - sim%p%headp(ilevel) + 1
+          if (num_parts <= 0) cycle
+          grid_size_part = (num_parts + block_size - 1) / block_size
+          call particle_clump_properties_kernel<<<grid_size_part, block_size>>>( &
+               & xp, vp, mp, flag2, peak_pos_d, peak_level_d, &
+               & peak_com_d, peak_vel_d, particle_mass_d, npart_d, periodic, box_size, &
+               & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+               & ilevel, sim%p%headp(ilevel), num_parts, int(sim%r%npartmax, kind=8))
+       end do
+    else if (ptype == 2 .and. sim%star%npart > 0) then
+       do ilevel = sim%r%levelmin, sim%r%nlevelmax
+          num_parts = sim%star%tailp(ilevel) - sim%star%headp(ilevel) + 1
+          if (num_parts <= 0) cycle
+          grid_size_part = (num_parts + block_size - 1) / block_size
+          call particle_clump_properties_kernel<<<grid_size_part, block_size>>>( &
+               & star_xp, star_vp, star_mp, flag2, peak_pos_d, peak_level_d, &
+               & peak_com_d, peak_vel_d, particle_mass_d, npart_d, periodic, box_size, &
+               & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+               & ilevel, sim%star%headp(ilevel), num_parts, int(sim%r%nstarmax, kind=8))
+       end do
+    endif
+
+    ! 3. Compute specific quantities and wrap center of mass
+    call finalize_particle_properties_kernel<<<grid_size_peaks, block_size>>>( &
+         & peak_com_d, peak_vel_d, peak_pos_d, particle_mass_d, periodic, box_size, npeak)
+  end subroutine gpu_particle_clump_properties
+
+  ! =========================================================================
+  ! Device Function: Linear radial bin of a particle around its peak (0 if outside)
+  ! =========================================================================
+  attributes(device) function mass_bin_index_device(x, xc, rad, periodic, &
+       & box_size1, box_size2, box_size3) result(jbin)
+    real(kind=dp), intent(in) :: x(1:ndim), xc(1:ndim)
+    real(kind=dp), value :: rad, box_size1, box_size2, box_size3
+    logical, device :: periodic(3)
+    integer :: jbin
+
+    integer :: idim, ibin
+    real(kind=dp) :: xpart(1:ndim), box(1:3), dist, dr
+
+    box(1) = box_size1; box(2) = box_size2; box(3) = box_size3
+    dist = 0.0_dp
+    do idim = 1, ndim
+       xpart(idim) = x(idim) - xc(idim)
+       ! In case of periodic boundaries
+       if (periodic(idim)) then
+          if (xpart(idim) >  box(idim)*0.5_dp) xpart(idim) = xpart(idim) - box(idim)
+          if (xpart(idim) < -box(idim)*0.5_dp) xpart(idim) = xpart(idim) + box(idim)
+       endif
+       dist = dist + xpart(idim)**2
+    end do
+    dist = sqrt(dist)
+    dr = 2.0_dp * rad / real(nbin, kind=dp)
+    jbin = 0
+    do ibin = 1, nbin
+       ! We use a simple linear binning as the mass is usually propto r
+       if (dist <= real(ibin, kind=dp) * dr) then
+          jbin = ibin
+          exit
+       endif
+    end do
+  end function mass_bin_index_device
+
+  ! =========================================================================
+  ! CUDA Kernel: Reset mass profiles, potentials and particle counts
+  ! =========================================================================
+  attributes(global) subroutine reset_mass_bin_kernel(mass_bin_d, phi_clump_d, npart_d, reset_phi, npeak)
+    real(kind=dp), device :: mass_bin_d(1:nbin, *), phi_clump_d(1:nbin, *)
+    integer, device :: npart_d(*)
+    logical, value :: reset_phi
+    integer, value :: npeak
+
+    integer :: ipeak, gid, tid
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    mass_bin_d(1:nbin, ipeak) = 0.0_dp
+    if (reset_phi) phi_clump_d(1:nbin, ipeak) = 0.0_dp
+    npart_d(ipeak) = 0
+  end subroutine reset_mass_bin_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Bin particles of peaks at merging level ilevel, then move
+  ! them to the next peak in the hierarchy
+  ! =========================================================================
+  attributes(global) subroutine particle_potential_kernel( &
+       & xp_d, mp_d, pid_d, lev_peak_d, new_peak_d, clump_rad_d, peak_pos_d, &
+       & mass_bin_d, npart_d, periodic, box_size1, box_size2, box_size3, &
+       & ilevel, num_parts, leading)
+    integer(kind=8), value :: leading
+    real(kind=dp), device :: xp_d(*), mp_d(*)
+    integer, device :: pid_d(*), lev_peak_d(*), new_peak_d(*), npart_d(*)
+    real(kind=dp), device :: clump_rad_d(*), peak_pos_d(1:ndim, *), mass_bin_d(1:nbin, *)
+    logical, device :: periodic(3)
+    real(kind=dp), value :: box_size1, box_size2, box_size3
+    integer, value :: ilevel, num_parts
+
+    integer :: ipart, gid, tid, idim, ipeak, ibin, info
+    real(kind=dp) :: x(1:ndim), info_dp
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > num_parts) return
+
+    ipart = gid
+    ipeak = pid_d(ipart)
+    if (ipeak == 0) return
+    if (lev_peak_d(ipeak) /= ilevel) return
+
+    do idim = 1, ndim
+       x(idim) = xp_d(ipart + (idim-1)*leading)
+    end do
+    ibin = mass_bin_index_device(x, peak_pos_d(1:ndim, ipeak), clump_rad_d(ipeak), periodic, &
+         & box_size1, box_size2, box_size3)
+    if (ibin > 0) then
+       info_dp = atomicadd(mass_bin_d(ibin, ipeak), mp_d(ipart))
+       info = atomicadd(npart_d(ipeak), 1)
+    endif
+
+    ! Assign particle to next peak in hierarchy
+    pid_d(ipart) = new_peak_d(ipeak)
+  end subroutine particle_potential_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Cumulative mass profile and self-potential of relevant peaks
+  ! =========================================================================
+  attributes(global) subroutine finalize_potential_kernel( &
+       & mass_bin_d, phi_clump_d, clump_rad_d, clump_mass_d, relevance_d, &
+       & mass_threshold, relevance_threshold, grav, npeak)
+    real(kind=dp), device :: mass_bin_d(1:nbin, *), phi_clump_d(1:nbin, *)
+    real(kind=dp), device :: clump_rad_d(*), clump_mass_d(*), relevance_d(*)
+    real(kind=dp), value :: mass_threshold, relevance_threshold, grav
+    integer, value :: npeak
+
+    integer :: ipeak, gid, tid, ibin
+    real(kind=dp) :: dr, dist
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    if (clump_mass_d(ipeak) <= mass_threshold) return
+    if (relevance_d(ipeak) <= relevance_threshold) return
+
+    ! Compute cumulative mass
+    do ibin = 1, nbin-1
+       mass_bin_d(ibin+1, ipeak) = mass_bin_d(ibin+1, ipeak) + mass_bin_d(ibin, ipeak)
+    end do
+
+    ! Convert mass profile into potential energy
+    dr = 2.0_dp * clump_rad_d(ipeak) / real(nbin, kind=dp)
+    dist = (real(nbin-1, kind=dp) + 0.5_dp) * dr
+    phi_clump_d(nbin, ipeak) = grav * mass_bin_d(nbin, ipeak) / dist**2 * dr
+    do ibin = nbin-1, 1, -1
+       dist = (real(ibin-1, kind=dp) + 0.5_dp) * dr
+       phi_clump_d(ibin, ipeak) = phi_clump_d(ibin+1, ipeak) + grav * mass_bin_d(ibin, ipeak) / dist**2 * dr
+    end do
+  end subroutine finalize_potential_kernel
+
+  ! =========================================================================
+  ! Host Driver: Hierarchical mass profiles and self-potential of clumps (DM)
+  ! =========================================================================
+  subroutine gpu_particle_potential(sim)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+
+    integer :: block_size, grid_size_peaks, grid_size_part, ilevel
+    real(kind=8) :: pi, grav
+
+    if (sim%c%npeak == 0) return
+
+    ! Constants
+    pi = acos(-1.0d0)
+    grav = 1.0d0
+    if (sim%r%cosmo) grav = 3.0d0/8.0d0/pi*sim%g%omega_m*sim%g%aexp
+
+    block_size = 256
+    grid_size_peaks = (sim%c%npeak + block_size - 1) / block_size
+
+    ! 1. Reset mass profiles, potentials and particle counts
+    call reset_mass_bin_kernel<<<grid_size_peaks, block_size>>>(mass_bin_d, phi_clump_d, npart_d, &
+         & .true., sim%c%npeak)
+
+    ! 2. Loop over merging hierarchy levels
+    if (sim%p%npart > 0) then
+       grid_size_part = (sim%p%npart + block_size - 1) / block_size
+       do ilevel = 0, sim%c%merge_levelmax + 1
+          call particle_potential_kernel<<<grid_size_part, block_size>>>( &
+               & xp, mp, pid, lev_peak_d, new_peak_d, clump_rad_d, peak_pos_d, &
+               & mass_bin_d, npart_d, periodic, real(sim%r%box_size(1), kind=dp), &
+               & real(sim%r%box_size(2), kind=dp), real(sim%r%box_size(3), kind=dp), &
+               & ilevel, sim%p%npart, int(sim%r%npartmax, kind=8))
+       end do
+    endif
+
+    ! 3. Cumulative mass profiles and self-potential
+    call finalize_potential_kernel<<<grid_size_peaks, block_size>>>( &
+         & mass_bin_d, phi_clump_d, clump_rad_d, clump_mass_d, relevance_d, &
+         & real(sim%c%mass_threshold, kind=dp), real(sim%c%relevance_threshold, kind=dp), &
+         & real(grav, kind=dp), sim%c%npeak)
+  end subroutine gpu_particle_potential
+
+  ! =========================================================================
+  ! Device Function: Total energy of a particle in the potential of its peak
+  ! =========================================================================
+  attributes(device) function total_energy_device(x, xc, v, vc, phi, rad, periodic, &
+       & box_size1, box_size2, box_size3) result(etot)
+    real(kind=dp), intent(in) :: x(1:ndim), xc(1:ndim), v(1:ndim), vc(1:ndim)
+    real(kind=dp), intent(in) :: phi(1:nbin)
+    real(kind=dp), value :: rad, box_size1, box_size2, box_size3
+    logical, device :: periodic(3)
+    real(kind=dp) :: etot
+
+    integer :: idim, ibin, ileft, iright
+    real(kind=dp) :: xpart(1:ndim), box(1:3), r2, r, dr, xbin, epot, ekin
+
+    box(1) = box_size1; box(2) = box_size2; box(3) = box_size3
+    r2 = 0.0_dp
+    do idim = 1, ndim
+       xpart(idim) = x(idim) - xc(idim)
+       ! In case of periodic boundaries
+       if (periodic(idim)) then
+          if (xpart(idim) >  box(idim)*0.5_dp) xpart(idim) = xpart(idim) - box(idim)
+          if (xpart(idim) < -box(idim)*0.5_dp) xpart(idim) = xpart(idim) + box(idim)
+       endif
+       r2 = r2 + xpart(idim)**2
+    end do
+    r = sqrt(r2)
+    dr = 2.0_dp * rad / real(nbin, kind=dp)
+    xbin = min(r / dr, real(nbin, kind=dp))
+    ibin = int(xbin)
+    ileft = ibin + 1
+    iright = ileft + 1
+    epot = 0.0_dp
+    if (ileft < nbin) then
+       epot = phi(ileft) * (real(ileft, kind=dp) - xbin) + phi(iright) * (xbin - real(ibin, kind=dp))
+    else if (ileft == nbin) then
+       epot = phi(ileft) * (real(ileft, kind=dp) - xbin)
+    endif
+    ekin = 0.0_dp
+    do idim = 1, ndim
+       ekin = ekin + 0.5_dp * (v(idim) - vc(idim))**2
+    end do
+    etot = ekin - epot
+  end function total_energy_device
+
+  ! =========================================================================
+  ! CUDA Kernel: Unbind particles of peaks at merging level ilevel
+  ! =========================================================================
+  attributes(global) subroutine particle_unbind_kernel( &
+       & xp_d, vp_d, pid_d, lev_peak_d, new_peak_d, clump_rad_d, clump_mass_d, &
+       & peak_pos_d, peak_vel_d, phi_clump_d, mass_threshold, periodic, &
+       & box_size1, box_size2, box_size3, ilevel, num_parts, leading)
+    integer(kind=8), value :: leading
+    real(kind=dp), device :: xp_d(*), vp_d(*)
+    integer, device :: pid_d(*), lev_peak_d(*), new_peak_d(*)
+    real(kind=dp), device :: clump_rad_d(*), clump_mass_d(*)
+    real(kind=dp), device :: peak_pos_d(1:ndim, *), peak_vel_d(1:ndim, *), phi_clump_d(1:nbin, *)
+    real(kind=dp), value :: mass_threshold, box_size1, box_size2, box_size3
+    logical, device :: periodic(3)
+    integer, value :: ilevel, num_parts
+
+    integer :: ipart, gid, tid, idim, ipeak
+    real(kind=dp) :: x(1:ndim), v(1:ndim), bound
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > num_parts) return
+
+    ipart = gid
+    ipeak = pid_d(ipart)
+    if (ipeak == 0) return ! ignore orphans
+    if (lev_peak_d(ipeak) /= ilevel) return
+
+    do idim = 1, ndim
+       x(idim) = xp_d(ipart + (idim-1)*leading)
+       v(idim) = vp_d(ipart + (idim-1)*leading)
+    end do
+    bound = total_energy_device(x, peak_pos_d(1:ndim, ipeak), v, peak_vel_d(1:ndim, ipeak), &
+         & phi_clump_d(1:nbin, ipeak), clump_rad_d(ipeak), periodic, box_size1, box_size2, box_size3)
+
+    ! If unbound, assign to next peak in hierarchy
+    if (bound >= 0.0_dp .or. clump_mass_d(ipeak) <= mass_threshold) then
+       if (new_peak_d(ipeak) == ipeak) then
+          ! If central, unbind particles to the void
+          pid_d(ipart) = 0
+       else
+          ! If satellite, offer unbound particles to the next peak in the hierarchy
+          pid_d(ipart) = new_peak_d(ipeak)
+       endif
+    endif
+  end subroutine particle_unbind_kernel
+
+  ! =========================================================================
+  ! Host Driver: Unbind particles hierarchically from clumps (DM)
+  ! =========================================================================
+  subroutine gpu_particle_unbind(sim)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+
+    integer :: block_size, grid_size_part, ilevel
+
+    if (sim%c%npeak == 0 .or. sim%p%npart == 0) return
+
+    block_size = 256
+    grid_size_part = (sim%p%npart + block_size - 1) / block_size
+
+    ! Loop over merging hierarchy levels
+    do ilevel = 0, sim%c%merge_levelmax
+       call particle_unbind_kernel<<<grid_size_part, block_size>>>( &
+            & xp, vp, pid, lev_peak_d, new_peak_d, clump_rad_d, clump_mass_d, &
+            & peak_pos_d, peak_vel_d, phi_clump_d, real(sim%c%mass_threshold, kind=dp), periodic, &
+            & real(sim%r%box_size(1), kind=dp), real(sim%r%box_size(2), kind=dp), &
+            & real(sim%r%box_size(3), kind=dp), ilevel, sim%p%npart, int(sim%r%npartmax, kind=8))
+    end do
+  end subroutine gpu_particle_unbind
+
+  ! =========================================================================
+  ! CUDA Kernel: Bin particles around their final peak
+  ! =========================================================================
+  attributes(global) subroutine mass_profile_kernel( &
+       & xp_d, mp_d, pid_d, clump_rad_d, peak_pos_d, mass_bin_d, npart_d, periodic, &
+       & box_size1, box_size2, box_size3, num_parts, leading)
+    integer(kind=8), value :: leading
+    real(kind=dp), device :: xp_d(*), mp_d(*)
+    integer, device :: pid_d(*), npart_d(*)
+    real(kind=dp), device :: clump_rad_d(*), peak_pos_d(1:ndim, *), mass_bin_d(1:nbin, *)
+    logical, device :: periodic(3)
+    real(kind=dp), value :: box_size1, box_size2, box_size3
+    integer, value :: num_parts
+
+    integer :: ipart, gid, tid, idim, ipeak, ibin, info
+    real(kind=dp) :: x(1:ndim), info_dp
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > num_parts) return
+
+    ipart = gid
+    ipeak = pid_d(ipart)
+    if (ipeak == 0) return
+
+    do idim = 1, ndim
+       x(idim) = xp_d(ipart + (idim-1)*leading)
+    end do
+    ibin = mass_bin_index_device(x, peak_pos_d(1:ndim, ipeak), clump_rad_d(ipeak), periodic, &
+         & box_size1, box_size2, box_size3)
+    if (ibin > 0) then
+       info_dp = atomicadd(mass_bin_d(ibin, ipeak), mp_d(ipart))
+       info = atomicadd(npart_d(ipeak), 1)
+    endif
+  end subroutine mass_profile_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Cumulative mass profile of relevant peaks
+  ! =========================================================================
+  attributes(global) subroutine cumulate_mass_kernel( &
+       & mass_bin_d, clump_mass_d, relevance_d, mass_threshold, relevance_threshold, npeak)
+    real(kind=dp), device :: mass_bin_d(1:nbin, *), clump_mass_d(*), relevance_d(*)
+    real(kind=dp), value :: mass_threshold, relevance_threshold
+    integer, value :: npeak
+
+    integer :: ipeak, gid, tid, ibin
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    if (clump_mass_d(ipeak) <= mass_threshold) return
+    if (relevance_d(ipeak) <= relevance_threshold) return
+
+    ! Compute cumulative mass
+    do ibin = 1, nbin-1
+       mass_bin_d(ibin+1, ipeak) = mass_bin_d(ibin+1, ipeak) + mass_bin_d(ibin, ipeak)
+    end do
+  end subroutine cumulate_mass_kernel
+
+  ! =========================================================================
+  ! Host Driver: Final clump mass profiles (DM)
+  ! =========================================================================
+  subroutine gpu_mass_profile(sim)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+
+    integer :: block_size, grid_size_peaks, grid_size_part
+
+    if (sim%c%npeak == 0) return
+
+    block_size = 256
+    grid_size_peaks = (sim%c%npeak + block_size - 1) / block_size
+
+    ! 1. Reset mass profiles and particle counts (keep the potential)
+    call reset_mass_bin_kernel<<<grid_size_peaks, block_size>>>(mass_bin_d, phi_clump_d, npart_d, &
+         & .false., sim%c%npeak)
+
+    ! 2. Bin particles around their final peak
+    if (sim%p%npart > 0) then
+       grid_size_part = (sim%p%npart + block_size - 1) / block_size
+       call mass_profile_kernel<<<grid_size_part, block_size>>>( &
+            & xp, mp, pid, clump_rad_d, peak_pos_d, mass_bin_d, npart_d, periodic, &
+            & real(sim%r%box_size(1), kind=dp), real(sim%r%box_size(2), kind=dp), &
+            & real(sim%r%box_size(3), kind=dp), sim%p%npart, int(sim%r%npartmax, kind=8))
+    endif
+
+    ! 3. Cumulative mass profiles
+    call cumulate_mass_kernel<<<grid_size_peaks, block_size>>>( &
+         & mass_bin_d, clump_mass_d, relevance_d, real(sim%c%mass_threshold, kind=dp), &
+         & real(sim%c%relevance_threshold, kind=dp), sim%c%npeak)
+  end subroutine gpu_mass_profile
+
+  ! =========================================================================
+  ! Device Function: Is this peak kept as a final clump?
+  ! =========================================================================
+  attributes(device) function keep_clump_device(clump_mass, relevance, npart, &
+       & mass_threshold, relevance_threshold, part_clump) result(keep)
+    real(kind=dp), value :: clump_mass, relevance, mass_threshold, relevance_threshold
+    integer, value :: npart
+    logical, value :: part_clump
+    logical :: keep
+
+    ! The particle count criterion only applies to particle-based clumps
+    keep = clump_mass > mass_threshold .and. relevance > relevance_threshold .and. &
+         & (npart > 0 .or. .not. part_clump)
+  end function keep_clump_device
+
+  ! =========================================================================
+  ! CUDA Kernel: Flag kept peaks (1) for the final index scan
+  ! =========================================================================
+  attributes(global) subroutine keep_clump_kernel(ind_final_d, clump_mass_d, relevance_d, npart_d, &
+       & mass_threshold, relevance_threshold, part_clump, npeak)
+    integer, device :: ind_final_d(*), npart_d(*)
+    real(kind=dp), device :: clump_mass_d(*), relevance_d(*)
+    real(kind=dp), value :: mass_threshold, relevance_threshold
+    logical, value :: part_clump
+    integer, value :: npeak
+
+    integer :: ipeak, gid, tid
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    if (keep_clump_device(clump_mass_d(ipeak), relevance_d(ipeak), npart_d(ipeak), &
+         & mass_threshold, relevance_threshold, part_clump)) then
+       ind_final_d(ipeak) = 1
+    else
+       ind_final_d(ipeak) = 0
+    endif
+  end subroutine keep_clump_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Zero the final index of dropped peaks (after the scan)
+  ! =========================================================================
+  attributes(global) subroutine drop_clump_kernel(ind_final_d, clump_mass_d, relevance_d, npart_d, &
+       & mass_threshold, relevance_threshold, part_clump, npeak)
+    integer, device :: ind_final_d(*), npart_d(*)
+    real(kind=dp), device :: clump_mass_d(*), relevance_d(*)
+    real(kind=dp), value :: mass_threshold, relevance_threshold
+    logical, value :: part_clump
+    integer, value :: npeak
+
+    integer :: ipeak, gid, tid
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    if (.not. keep_clump_device(clump_mass_d(ipeak), relevance_d(ipeak), npart_d(ipeak), &
+         & mass_threshold, relevance_threshold, part_clump)) ind_final_d(ipeak) = 0
+  end subroutine drop_clump_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Change parent and halo indices of kept peaks to final indices
+  ! =========================================================================
+  attributes(global) subroutine remap_peak_index_kernel(new_peak_d, ind_halo_d, ind_final_d, &
+       & do_halo, npeak)
+    integer, device :: new_peak_d(*), ind_halo_d(*), ind_final_d(*)
+    logical, value :: do_halo
+    integer, value :: npeak
+
+    integer :: ipeak, gid, tid
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+    if (ind_final_d(ipeak) == 0) return
+    new_peak_d(ipeak) = ind_final_d(new_peak_d(ipeak))
+    if (do_halo) ind_halo_d(ipeak) = ind_final_d(ind_halo_d(ipeak))
+  end subroutine remap_peak_index_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Change particle peak ids to final indices (0 if dropped)
+  ! =========================================================================
+  attributes(global) subroutine trim_particles_kernel(id_d, ind_final_d, num_parts)
+    integer, device :: id_d(*), ind_final_d(*)
+    integer, value :: num_parts
+
+    integer :: ipart, gid, tid
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > num_parts) return
+
+    ipart = gid
+    if (id_d(ipart) /= 0) id_d(ipart) = ind_final_d(id_d(ipart))
+  end subroutine trim_particles_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Change peak (flag2) or halo (flag1) ids of test cells to final indices
+  ! =========================================================================
+  attributes(global) subroutine trim_flag_kernel(flag, grid_d, cell_d, ind_final_d, ntest)
+    integer, device :: flag(1:twotondim, *)
+    integer, device :: grid_d(*), cell_d(*), ind_final_d(*)
+    integer, value :: ntest
+
+    integer :: itest, gid, tid, igrid, ind
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > ntest) return
+
+    itest = gid
+    igrid = grid_d(itest)
+    ind = cell_d(itest)
+    if (flag(ind, igrid) /= 0) flag(ind, igrid) = ind_final_d(flag(ind, igrid))
+  end subroutine trim_flag_kernel
+
+  ! =========================================================================
+  ! Host Driver: Remove irrelevant clumps and renumber the final ones on GPU
+  ! =========================================================================
+  subroutine gpu_trim_clumps(sim)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+
+    integer :: block_size, grid_size_peaks, grid_size_test, grid_size_part
+    logical :: part_clump, do_halo
+    real(kind=dp) :: mass_threshold, relevance_threshold
+
+    if (sim%c%npeak == 0) return
+
+    ! The particle count criterion only applies to particle-based clumps
+    part_clump = (sim%r%rho_type_clump == 1 .or. sim%r%rho_type_clump == 2)
+    do_halo = (sim%c%saddle_threshold > 0)
+    mass_threshold = real(sim%c%mass_threshold, kind=dp)
+    relevance_threshold = real(sim%c%relevance_threshold, kind=dp)
+
+    block_size = 256
+    grid_size_peaks = (sim%c%npeak + block_size - 1) / block_size
+    grid_size_test = (sim%c%ntest + block_size - 1) / block_size
+
+    ! 1. Final clump indices: inclusive scan of kept peaks, 0 for dropped ones
+    call keep_clump_kernel<<<grid_size_peaks, block_size>>>(ind_final_d, clump_mass_d, relevance_d, &
+         & npart_d, mass_threshold, relevance_threshold, part_clump, sim%c%npeak)
+    call gpu_scan(ind_final_d, 1, sim%c%npeak)
+    call drop_clump_kernel<<<grid_size_peaks, block_size>>>(ind_final_d, clump_mass_d, relevance_d, &
+         & npart_d, mass_threshold, relevance_threshold, part_clump, sim%c%npeak)
+
+    ! 2. Change other important peak indices
+    call remap_peak_index_kernel<<<grid_size_peaks, block_size>>>(new_peak_d, ind_halo_d, ind_final_d, &
+         & do_halo, sim%c%npeak)
+
+    ! 3. Modify particle peak ids accordingly
+    if (sim%r%part .and. sim%p%npart > 0) then
+       grid_size_part = (sim%p%npart + block_size - 1) / block_size
+       call trim_particles_kernel<<<grid_size_part, block_size>>>(pid, ind_final_d, sim%p%npart)
+    endif
+    if (sim%r%star .and. sim%star%npart > 0) then
+       grid_size_part = (sim%star%npart + block_size - 1) / block_size
+       call trim_particles_kernel<<<grid_size_part, block_size>>>(star_pid, ind_final_d, sim%star%npart)
+    endif
+    if (sim%r%sink .and. sim%sink%npart > 0) then
+       grid_size_part = (sim%sink%npart + block_size - 1) / block_size
+       call trim_particles_kernel<<<grid_size_part, block_size>>>(sink_pid, ind_final_d, sim%sink%npart)
+    endif
+
+    ! 4. Modify flag2 (and flag1 if halos) accordingly
+    if (sim%c%ntest > 0) then
+       call trim_flag_kernel<<<grid_size_test, block_size>>>(flag2, grid_d, cell_d, ind_final_d, sim%c%ntest)
+       if (do_halo) then
+          call trim_flag_kernel<<<grid_size_test, block_size>>>(flag1, grid_d, cell_d, ind_final_d, sim%c%ntest)
+       endif
+    endif
+  end subroutine gpu_trim_clumps
+
+  ! =========================================================================
+  ! Host Driver: Complete clump finder workflow on the GPU
+  ! =========================================================================
+  subroutine gpu_clump_finder(sim)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+
+    ! 0. The GPU clump finder works on a single MPI rank only
+    if (sim%g%ncpu > 1) then
+       write(*,*) 'gpu_clump_finder: the GPU clump finder requires a single MPI rank'
+       stop
+    endif
+
+    ! 1. Store clump finder parameters in clump object
+    sim%c%relevance_threshold = sim%r%relevance_threshold
+    sim%c%density_threshold   = sim%r%density_threshold
+    sim%c%saddle_threshold    = sim%r%saddle_threshold
+    sim%c%mass_threshold      = sim%r%mass_threshold
+    sim%c%purity_threshold    = sim%r%purity_threshold
+    sim%c%fraction_threshold  = sim%r%fraction_threshold
+
+    ! 2. Smooth density field
+    call gpu_smooth_rho(sim)
+
+    ! 3. Collect test cells above threshold
+    call gpu_collect_test(sim, sim%c%ntest)
+    sim%c%ntest_tot = sim%c%ntest
+    if (sim%g%myid == 1) then
+       write(*,'(" Found",I12,"  cells above threshold")')int(sim%c%ntest_tot,kind=4)
+    endif
+    if (sim%c%ntest_tot == 0) return
+
+    ! 4. Detect local density peaks
+    call gpu_collect_peak(sim, sim%c%ntest, sim%c%npeak)
+    sim%c%npeak_tot = sim%c%npeak
+    if (sim%g%myid == 1) then
+       write(*,'(" Found",I12,"  density peaks")')int(sim%c%npeak_tot,kind=4)
+    endif
+    if (sim%c%npeak_tot == 0) return
+
+    ! 5. Watershed segmentation
+    call gpu_collect_patch(sim, sim%c%ntest, sim%c%npeak)
+
+    ! 6. Merge irrelevant peak-patches
+    call gpu_merge_clumps(sim, 'relevance', sim%c%ntest, sim%c%npeak)
+
+    ! 7. Peak-patch properties (peak ids saved into flag2)
+    call gpu_compute_clump_properties(sim, sim%r%rho_type_clump, sim%c%ntest, sim%c%npeak)
+
+    ! 8. Particle peak ids and particle-based peak-patch properties
+    if (sim%r%part) then
+       call gpu_particle_peak_id(sim, 1)
+       if (sim%r%rho_type_clump == 1) call gpu_particle_clump_properties(sim, 1, sim%c%npeak)
+    endif
+    if (sim%r%star) then
+       call gpu_particle_peak_id(sim, 2)
+       if (sim%r%rho_type_clump == 2) call gpu_particle_clump_properties(sim, 2, sim%c%npeak)
+    endif
+    if (sim%r%sink) then
+       call gpu_particle_peak_id(sim, 3)
+    endif
+
+    ! 9. Merge peak-patches into halo-patches (halo ids in flag1)
+    if (sim%c%saddle_threshold > 0) then
+       call gpu_merge_clumps(sim, 'saddleden', sim%c%ntest, sim%c%npeak)
+    endif
+
+    ! 10. Self-potential, unbinding and final mass profiles (dark matter)
+    if (sim%c%saddle_threshold > 0 .and. sim%r%part .and. sim%r%rho_type_clump == 1) then
+       call gpu_particle_potential(sim)
+       call gpu_particle_peak_id(sim, 1)
+       call gpu_particle_unbind(sim)
+       call gpu_mass_profile(sim)
+    endif
+
+    ! 11. Remove irrelevant clumps and renumber the final ones
+    call gpu_trim_clumps(sim)
+
+    ! 12. Particle halo ids
+    if (sim%c%saddle_threshold > 0) then
+       if (sim%r%part) call gpu_particle_halo_id(sim, 1)
+       if (sim%r%star) call gpu_particle_halo_id(sim, 2)
+       if (sim%r%sink) call gpu_particle_halo_id(sim, 3)
+    endif
+  end subroutine gpu_clump_finder
+
+  ! =========================================================================
   ! Host Driver: Complete clump finding workflow on the GPU
   ! =========================================================================
   subroutine gpu_sink_clump(sim)
@@ -1506,11 +2513,18 @@ contains
     implicit none
     type(ramses_t) :: sim
 
+    ! 0. The GPU clump finder works on a single MPI rank only
+    if (sim%g%ncpu > 1) then
+       write(*,*) 'gpu_sink_clump: GPU sink formation requires a single MPI rank'
+       stop
+    endif
+
     ! 1. Load clump finder parameters
     sim%c%relevance_threshold = sim%r%sink_relevance_threshold
     sim%c%density_threshold   = sim%r%sink_density_threshold
     sim%c%saddle_threshold    = sim%r%sink_saddle_threshold
     sim%c%mass_threshold      = sim%r%sink_mass_threshold
+    sim%c%purity_threshold    = sim%r%sink_purity_threshold
     sim%c%fraction_threshold  = sim%r%sink_fraction_threshold
 
     ! 2. Smooth density field
@@ -1518,13 +2532,21 @@ contains
 
     ! 3. Collect test cells above threshold
     call gpu_collect_test(sim, sim%c%ntest)
+    sim%c%ntest_tot = sim%c%ntest
+    if (sim%g%myid == 1) then
+       write(*,'(" Found",I12,"  cells above threshold")')int(sim%c%ntest_tot,kind=4)
+    endif
 
-    if (sim%c%ntest == 0) return
+    if (sim%c%ntest_tot == 0) return
 
     ! 4. Detect local density peaks
     call gpu_collect_peak(sim, sim%c%ntest, sim%c%npeak)
+    sim%c%npeak_tot = sim%c%npeak
+    if (sim%g%myid == 1) then
+       write(*,'(" Found",I12,"  density peaks")')int(sim%c%npeak_tot,kind=4)
+    endif
 
-    if (sim%c%npeak == 0) return
+    if (sim%c%npeak_tot == 0) return
 
     ! 5. Perform watershed segmentation (collect patches)
     call gpu_collect_patch(sim, sim%c%ntest, sim%c%npeak)
@@ -1535,57 +2557,150 @@ contains
     ! 7. Compute clump properties
     call gpu_compute_clump_properties(sim, sim%r%rho_type_sink, sim%c%ntest, sim%c%npeak)
 
-    ! 8. Merge clumps into halos if saddle density threshold is positive
+    ! 8. Compute particle-based clump properties
+    if (sim%r%part .and. sim%r%rho_type_sink == 1) then
+       call gpu_particle_clump_properties(sim, 1, sim%c%npeak)
+    endif
+    if (sim%r%star .and. sim%r%rho_type_sink == 2) then
+       call gpu_particle_clump_properties(sim, 2, sim%c%npeak)
+    endif
+
+    ! 9. Merge clumps into halos if saddle density threshold is positive
     if (sim%c%saddle_threshold > 0.0d0) then
        call gpu_merge_clumps(sim, 'saddleden', sim%c%ntest, sim%c%npeak)
     endif
 
-    ! 9. Map sinks to peaks
+    ! 10. Map sinks to peaks
     call gpu_sink_peak_id(sim)
 
-    ! 10. Count sinks inside each peak
-    call gpu_sink_in_peak(sim)
+    ! 11. Reset sink position to peak position and count sinks inside each peak
+    call gpu_sink_in_peak(sim, sim%r%sink_recenter_on_peak, .true.)
   end subroutine gpu_sink_clump
 
   ! =========================================================================
-  ! CUDA Kernel: Map sink particles to their grid cells and retrieve peak IDs
+  ! Device Function: Peak patch id (flag2) of the cell containing a particle
   ! =========================================================================
-  attributes(global) subroutine gpu_sink_peak_id_kernel(nsink, boxlen, hash_size)
-    integer, value :: nsink
+  attributes(device) function particle_peak_id_device(x, ilevel, boxlen, flag2, &
+       & hash_key, hash_val, hash_size) result(ipeak)
+    real(kind=dp), intent(in) :: x(1:ndim)
+    integer, value :: ilevel, hash_size
     real(kind=dp), value :: boxlen
-    integer, value :: hash_size
+    integer, device :: flag2(1:twotondim, *)
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer :: ipeak
 
-    integer :: ipart, gid, tid, idim, igrid, icell
+    integer :: idim, igrid, icell
     integer(kind=8) :: hash_cell(0:3)
     real(kind=dp) :: dx_loc
-    integer :: global_peak_id
-    integer :: ckey(3)
-
-    tid = threadIdx%x
-    gid = tid + (blockIdx%x - 1) * blockDim%x
-    if (gid > nsink) return
-
-    ipart = gid
 
     ! Find parent cell at particle's level using coordinate spacing
-    dx_loc = boxlen / (2**sink_levelp(ipart))
+    dx_loc = boxlen / (2**ilevel)
+    hash_cell = 0
+    hash_cell(0) = ilevel + 1
     do idim = 1, ndim
-       ckey(idim) = int(sink_xp(ipart, idim) / dx_loc)
+       hash_cell(idim) = int(x(idim) / dx_loc)
     end do
-
-    hash_cell(0) = sink_levelp(ipart) + 1
-    hash_cell(1:ndim) = ckey(1:ndim)
 
     ! Look up parent cell coordinates in the spatial hash table
     call get_parent_cell_device(hash_cell, igrid, icell, hash_key, hash_val, hash_size)
 
-    global_peak_id = 0
+    ipeak = 0
     if (igrid > 0) then
-       global_peak_id = flag2(icell, igrid)
+       ipeak = flag2(icell, igrid)
     endif
+  end function particle_peak_id_device
 
-    sink_pid(ipart) = global_peak_id
-  end subroutine gpu_sink_peak_id_kernel
+  ! =========================================================================
+  ! CUDA Kernel: Peak (flag2) or halo (flag1) id of the cell containing a particle
+  ! =========================================================================
+  attributes(global) subroutine particle_id_kernel(xp_d, id_d, flag, &
+       & hash_key, hash_val, hash_size, boxlen, ilevel, head_part, num_parts, leading)
+    integer(kind=8), value :: leading
+    real(kind=dp), device :: xp_d(*)
+    integer, device :: id_d(*)
+    integer, device :: flag(1:twotondim, *)
+    integer(kind=8), device :: hash_key(*)
+    integer(kind=4), device :: hash_val(*)
+    integer, value :: hash_size, ilevel, head_part, num_parts
+    real(kind=dp), value :: boxlen
+
+    integer :: ipart, gid, tid, idim
+    real(kind=dp) :: x(1:ndim)
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > num_parts) return
+
+    ! Particle of level ilevel (headp..tailp list, as on the CPU)
+    ipart = head_part + gid - 1
+
+    do idim = 1, ndim
+       x(idim) = xp_d(ipart + (idim-1)*leading)
+    end do
+    id_d(ipart) = particle_peak_id_device(x, ilevel, boxlen, flag, &
+         & hash_key, hash_val, hash_size)
+  end subroutine particle_id_kernel
+
+  ! =========================================================================
+  ! Host Driver: Peak or halo id of particles, level by level (as on the CPU)
+  ! =========================================================================
+  subroutine launch_particle_id(sim, p, xp_d, id_d, flag, leading)
+    use ramses_commons, only: ramses_t
+    use pm_commons, only: part_t
+    implicit none
+    type(ramses_t) :: sim
+    type(part_t) :: p
+    real(kind=dp), device :: xp_d(*)
+    integer, device :: id_d(*)
+    integer, device :: flag(1:twotondim, *)
+    integer(kind=8), intent(in) :: leading
+
+    integer :: block_size, grid_size, ilevel, num_parts
+
+    if (p%npart == 0) return
+
+    ! Particles below levelmin are not assigned to peaks
+    id_d(1:p%npart) = 0
+
+    block_size = 256
+    do ilevel = sim%r%levelmin, sim%r%nlevelmax
+       num_parts = p%tailp(ilevel) - p%headp(ilevel) + 1
+       if (num_parts <= 0) cycle
+       grid_size = (num_parts + block_size - 1) / block_size
+       call particle_id_kernel<<<grid_size, block_size>>>(xp_d, id_d, flag, &
+            & hash_key, hash_val, sim%m%hash_size, real(sim%r%boxlen, kind=dp), &
+            & ilevel, p%headp(ilevel), num_parts, leading)
+    end do
+  end subroutine launch_particle_id
+
+  ! =========================================================================
+  ! Host Driver: Particle peak ids (flag2) on GPU
+  ! =========================================================================
+  subroutine gpu_particle_peak_id(sim, ptype)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+    integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars, 3 = sinks
+
+    if (ptype == 1) call launch_particle_id(sim, sim%p,    xp,      pid,      flag2, int(sim%r%npartmax, kind=8))
+    if (ptype == 2) call launch_particle_id(sim, sim%star, star_xp, star_pid, flag2, int(sim%r%nstarmax, kind=8))
+    if (ptype == 3) call launch_particle_id(sim, sim%sink, sink_xp, sink_pid, flag2, int(sim%r%nsinkmax, kind=8))
+  end subroutine gpu_particle_peak_id
+
+  ! =========================================================================
+  ! Host Driver: Particle halo ids (flag1) on GPU
+  ! =========================================================================
+  subroutine gpu_particle_halo_id(sim, ptype)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+    integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars, 3 = sinks
+
+    if (ptype == 1) call launch_particle_id(sim, sim%p,    xp,      hid,      flag1, int(sim%r%npartmax, kind=8))
+    if (ptype == 2) call launch_particle_id(sim, sim%star, star_xp, star_hid, flag1, int(sim%r%nstarmax, kind=8))
+    if (ptype == 3) call launch_particle_id(sim, sim%sink, sink_xp, sink_hid, flag1, int(sim%r%nsinkmax, kind=8))
+  end subroutine gpu_particle_halo_id
 
   ! =========================================================================
   ! Host Driver: Map sink particles to peak IDs on GPU
@@ -1595,16 +2710,37 @@ contains
     implicit none
     type(ramses_t) :: sim
 
-    integer :: block_size, grid_size
-
-    if (sim%sink%npart == 0) return
-
-    block_size = 256
-    grid_size = (sim%sink%npart + block_size - 1) / block_size
-
-    call gpu_sink_peak_id_kernel<<<grid_size, block_size>>>( &
-         & sim%sink%npart, real(sim%r%boxlen, kind=dp), sim%m%hash_size)
+    call launch_particle_id(sim, sim%sink, sink_xp, sink_pid, flag2, int(sim%r%nsinkmax, kind=8))
   end subroutine gpu_sink_peak_id
+
+  ! =========================================================================
+  ! CUDA Kernel: Reset sink position, velocity and force to peak values
+  ! =========================================================================
+  attributes(global) subroutine gpu_sink_recenter_kernel(nsink, dtnew_d)
+    integer, value :: nsink
+    real(kind=8), device :: dtnew_d(*)
+    integer :: ipart, gid, tid, idim
+    integer :: peak_nr, ilevel
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > nsink) return
+
+    ipart = gid
+    peak_nr = sink_pid(ipart)
+
+    if (peak_nr > 0) then
+       ilevel = peak_level_d(peak_nr)
+       do idim = 1, ndim
+          ! Compute sink particle position from peak position
+          sink_xp(ipart, idim) = peak_com_d(idim, peak_nr)
+          ! Compute sink particle velocity from peak velocity
+          sink_vp(ipart, idim) = peak_vel_d(idim, peak_nr) - peak_acc_d(idim, peak_nr) * 0.5d0 * dtnew_d(ilevel)
+          ! Compute sink particle old force from peak acceleration
+          sink_fp(ipart, idim) = peak_acc_d(idim, peak_nr)
+       end do
+    endif
+  end subroutine gpu_sink_recenter_kernel
 
   ! =========================================================================
   ! CUDA Kernel: Map each active sink to its peak and increment sink count
@@ -1656,10 +2792,11 @@ contains
   ! =========================================================================
   ! Host Driver: Count sinks in each peak/clump and propagate hierarchically
   ! =========================================================================
-  subroutine gpu_sink_in_peak(sim)
+  subroutine gpu_sink_in_peak(sim, reset_sink_pos, count_sink)
     use ramses_commons, only: ramses_t
     implicit none
     type(ramses_t) :: sim
+    logical, intent(in) :: reset_sink_pos, count_sink
 
     integer :: block_size, grid_size_sinks, grid_size_peaks
     integer :: ilev
@@ -1670,22 +2807,29 @@ contains
     grid_size_sinks = (sim%sink%npart + block_size - 1) / block_size
     grid_size_peaks = (sim%c%npeak + block_size - 1) / block_size
 
-    ! 1. Clear device sink counters
-    nsink_d = 0
-
-    ! 2. Count sinks in each peak
-    if (sim%sink%npart > 0) then
-       call gpu_count_sinks_kernel<<<grid_size_sinks, block_size>>>(sim%sink%npart)
+    ! 1. Reset sink position to peak position
+    if (reset_sink_pos .and. sim%sink%npart > 0) then
+       dtnew_part_d = sim%g%dtnew
+       call gpu_sink_recenter_kernel<<<grid_size_sinks, block_size>>>(sim%sink%npart, dtnew_part_d)
     endif
 
-    ! 3. Count sinks hierarchically in each halo (if saddle threshold is active)
-    if (sim%c%saddle_threshold > 0.0d0) then
-       do ilev = 0, sim%c%merge_levelmax
-          call gpu_hierarchical_sink_count_kernel<<<grid_size_peaks, block_size>>>(sim%c%npeak, ilev)
-       end do
+    ! 2. Count sink particles in each halo
+    if (count_sink) then
+       ! Clear device sink counters
+       nsink_d = 0
+       ! Count sinks in each peak
+       if (sim%sink%npart > 0) then
+          call gpu_count_sinks_kernel<<<grid_size_sinks, block_size>>>(sim%sink%npart)
+       endif
+       ! Count sinks hierarchically in each halo (if saddle threshold is active)
+       if (sim%c%saddle_threshold > 0.0d0) then
+          do ilev = 0, sim%c%merge_levelmax
+             call gpu_hierarchical_sink_count_kernel<<<grid_size_peaks, block_size>>>(sim%c%npeak, ilev)
+          end do
+       endif
     endif
 
-    ! 4. Copy updated sink counts back to the host
+    ! 3. Copy updated sink counts back to the host
     if (allocated(sim%c%nsink)) then
        sim%c%nsink(1:sim%c%npeak) = nsink_d(1:sim%c%npeak)
     endif
@@ -1695,10 +2839,13 @@ contains
   ! CUDA Kernel: Evaluate sink formation sites on the GPU
   ! =========================================================================
   attributes(global) subroutine count_sink_site_kernel( &
-       & npeak, relevance_threshold, mass_threshold, &
+       & npeak, relevance_threshold, mass_threshold, saddle_threshold, &
+       & purity_threshold, mp_min, rho_type_sink, &
        & nstar_threshold, mseed, boxlen, prefix_sum)
     integer, value :: npeak
-    real(kind=8), value :: relevance_threshold, mass_threshold
+    real(kind=8), value :: relevance_threshold, mass_threshold, saddle_threshold
+    real(kind=8), value :: purity_threshold, mp_min
+    integer, value :: rho_type_sink
     real(kind=8), value :: nstar_threshold, mseed, boxlen
     integer(kind=4), device :: prefix_sum(*)
 
@@ -1707,6 +2854,7 @@ contains
     integer :: ind, igrid, ilevel
     real(kind=dp) :: dgas, dx_loc, vol_loc
 #endif
+    real(kind=dp) :: purity
     logical :: ok
 
     tid = threadIdx%x
@@ -1716,15 +2864,25 @@ contains
     jpeak = gid
     ok = .true.
 
-    ! 1. Check if peak is a halo
-    if (ind_halo_d(jpeak) /= jpeak) ok = .false.
+    ! 1. Check if peak is a halo (only if halos have been computed)
+    if (saddle_threshold > 0.0d0) then
+       if (ind_halo_d(jpeak) /= jpeak) ok = .false.
+    endif
     ! 2. Relevance threshold check
     if (relevance_d(jpeak) <= relevance_threshold) ok = .false.
     ! 3. Clump mass threshold check
     if (clump_mass_d(jpeak) <= mass_threshold) ok = .false.
     ! 4. Ensure no existing sinks in the peak
     if (nsink_d(jpeak) > 0) ok = .false.
-    ! 5. Hydro-specific conditions
+    ! 5. Dark matter purity and particle count checks
+    if (rho_type_sink == 1) then
+       if (particle_mass_d(jpeak) > 0.0d0) then
+          purity = npart_d(jpeak) * mp_min / particle_mass_d(jpeak)
+          if (purity <= purity_threshold) ok = .false.
+       endif
+       if (npart_d(jpeak) == 0) ok = .false.
+    endif
+    ! 6. Hydro-specific conditions
 #ifdef HYDRO
     if (ok) then
        ind = peak_cell_d(jpeak)
@@ -1733,9 +2891,9 @@ contains
        ilevel = peak_level_d(jpeak)
        dx_loc = boxlen / (2**ilevel)
        vol_loc = dx_loc**ndim
-       ! 6. Star forming cell check
+       ! 7. Star forming cell check
        if (dgas <= nstar_threshold) ok = .false.
-       ! 7. Enough gas mass available check
+       ! 8. Enough gas mass available check
        if (mseed > 0.75d0 * dgas * vol_loc) ok = .false.
     endif
 #endif
@@ -1792,16 +2950,17 @@ contains
 
     integer :: sink_idx, gid, tid, jpeak, ilevel, idim
 #ifdef HYDRO
-    integer :: ind, igrid
+    integer :: ind, igrid, ivar
+    real(kind=dp) :: dseed, mass_frac
 #endif
     real(kind=dp) :: dx_loc
 
     tid = threadIdx%x
     gid = tid + (blockIdx%x - 1) * blockDim%x
-    if (gid >= npart_new) return
+    if (gid > npart_new) return
 
-    jpeak = swap_local(1 + gid)
-    sink_idx = head_part + gid
+    jpeak = swap_local(gid)
+    sink_idx = head_part + gid - 1
 
     ilevel = peak_level_d(jpeak)
     dx_loc = boxlen / (2**ilevel)
@@ -1821,18 +2980,31 @@ contains
     sink_fp(sink_idx, 2) = peak_acc_d(2, jpeak)
     sink_fp(sink_idx, 3) = peak_acc_d(3, jpeak)
 
+    ! Set initial angular momentum to almost zero
+    sink_jp(sink_idx, 1) = 0.0d0
+    sink_jp(sink_idx, 2) = 0.0d0
+    sink_jp(sink_idx, 3) = 1.0d-20
+
     ! Mass and birth properties
     sink_mp(sink_idx) = 0.0d0
 #ifdef HYDRO
     sink_mp(sink_idx) = mseed
     ind = peak_cell_d(jpeak)
     igrid = peak_grid_d(jpeak)
-    ! Subtract density from cell gas variables
-    uold(ind, 1, igrid) = uold(ind, 1, igrid) - mseed / (dx_loc**ndim)
+    ! Remove seed mass from all cell gas variables
+    dseed = mseed / (dx_loc**ndim)
+    mass_frac = 1.0d0 - dseed / uold(ind, 1, igrid)
+    do ivar = 1, nvar
+       uold(ind, ivar, igrid) = uold(ind, ivar, igrid) * mass_frac
+    end do
 #endif
     sink_tp(sink_idx) = texp
+    ! Set merging time to -1000
+    sink_tm(sink_idx) = -1000.0d0
+    ! Set merging id to 0
+    sink_idm(sink_idx) = 0
     sink_levelp(sink_idx) = ilevel
-    sink_idp(sink_idx) = npart_tot_old + 1 + gid
+    sink_idp(sink_idx) = npart_tot_old + gid
   end subroutine sink_formation_kernel
 
   ! =========================================================================
@@ -1868,8 +3040,9 @@ contains
     call nvtxStartRange("Count Sink Formation Sites", color=5)!red
     call count_sink_site_kernel<<<num_blocks, num_threads>>>( &
          & sim%c%npeak, &
-         & sim%c%relevance_threshold, sim%c%mass_threshold, &
-         & sim%r%sink_nstar_frac * sim%r%n_star, mseed, sim%r%boxlen, &
+         & sim%c%relevance_threshold, sim%c%mass_threshold, sim%c%saddle_threshold, &
+         & sim%c%purity_threshold, sim%g%mp_min, sim%r%rho_type_sink, &
+         & sim%r%sink_nstar_frac * sim%r%n_star / scale_nH, mseed, sim%r%boxlen, &
          & prefix_sum)
     call GPU_Error_Check(__FILE__, __LINE__)
     call nvtxEndRange()
@@ -1909,7 +3082,13 @@ contains
        sim%sink%npart_tot = sim%sink%npart_tot + npart_new
        sim%sink%tailp(sim%r%nlevelmax) = sim%sink%tailp(sim%r%nlevelmax) + npart_new
 
+#ifdef HYDRO
        msink_loc = real(npart_new, kind=8) * mseed
+#endif
+    endif
+
+    if (sim%g%myid == 1) then
+       write(*,'(" Formed",I11,"  new sinks for a total of ",I0)')npart_new,int(sim%sink%npart_tot,kind=4)
     endif
   end subroutine gpu_sink_formation
 

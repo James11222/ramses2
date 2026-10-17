@@ -251,8 +251,8 @@ contains
        & isp_swap, num_selected, &
        & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, ngridmax, &
        & box_ckey_min_d, box_ckey_max_d, periodic_d, &
-       & eta_SNII, yield_SNII, e_SN, M_SNII, z_ave, scale_nH, metal, imetal, gamma, &
-       & d_skip, dx_loc, vol_loc, ilevel, leading, msn_loc_d, smallr)
+       & eta_SNII, yield_SNII, e_SN, E_SNII_51, m_SN, M_SNII, z_ave, scale_nH, metal, imetal, gamma, &
+       & skip1, skip2, skip3, dx_loc, vol_loc, ilevel, leading, msn_loc_d, smallr)
     implicit none
     type(oct), device :: grid(*)
     real(kind=dp), device :: uold(1:twotondim,1:nvar,*)
@@ -272,16 +272,16 @@ contains
     integer(kind=4), device :: box_ckey_min_d(3,*)
     integer(kind=4), device :: box_ckey_max_d(3,*)
     logical, device :: periodic_d(3)
-    real(kind=8), intent(in), value :: eta_SNII, yield_SNII, e_SN, M_SNII, z_ave, scale_nH
+    real(kind=dp), intent(in), value :: eta_SNII, yield_SNII, e_SN, E_SNII_51, m_SN, M_SNII, z_ave, scale_nH
     logical, intent(in), value :: metal
     integer(kind=4), intent(in), value :: imetal
-    real(kind=8), intent(in), value :: gamma
-    real(kind=8), device :: d_skip(3)
-    real(kind=8), intent(in), value :: dx_loc, vol_loc
+    real(kind=dp), intent(in), value :: gamma
+    real(kind=dp), intent(in), value :: skip1, skip2, skip3
+    real(kind=dp), intent(in), value :: dx_loc, vol_loc
     integer(kind=4), intent(in), value :: ilevel
     integer(kind=8), intent(in), value :: leading
-    real(kind=8), device :: msn_loc_d
-    real(kind=8), intent(in), value :: smallr
+    real(kind=dp), device :: msn_loc_d
+    real(kind=dp), intent(in), value :: smallr
 
     ! Neighbor coordinate offsets
     real(kind=dp), parameter, dimension(3, 48) :: xSNnei_const = reshape((/ &
@@ -401,6 +401,7 @@ contains
     integer :: igridn, icelln, level_nbor, cell_level
     real(kind=dp) :: mejecta, dloss, ekloss, zloss, dzloss, num_sn, up, vp, wp, d_nei
     real(kind=dp) :: dold, vp_sum, xs, inv_dx_loc, inv_2dx_loc, inv_4dx_loc
+    real(kind=dp) :: skip(3)
     real(kind=dp) :: xcen(3), xnei(3)
     real(kind=dp) :: d, u, v, w, e, ekk, eth, T2, z, q(nvar)
     real(kind=dp) :: x_off, y_off, z_off, xnei_min, xnei_max
@@ -424,13 +425,17 @@ contains
 
     if (tid_star >= num_selected) return
 
+    skip(1) = skip1
+    skip(2) = skip2
+    skip(3) = skip3
+
     inv_dx_loc  = 1.0_dp / dx_loc
     inv_2dx_loc = 0.5_dp * inv_dx_loc
     inv_4dx_loc = 0.25_dp * inv_dx_loc
 
     ! Try ilevel first
     do idim = 1, 3
-       xs = star_xp(ipart + (idim-1)*leading) + d_skip(idim)
+       xs = star_xp(ipart + (idim-1)*leading) + skip(idim)
        ix(idim) = floor(xs * inv_2dx_loc)
     end do
     ix8 = int(ix(1), kind=8)
@@ -444,7 +449,7 @@ contains
 
     if (igrid > 0 .and. igrid <= ngridmax) then
        do idim = 1, 3
-          xs = star_xp(ipart + (idim-1)*leading) + d_skip(idim)
+          xs = star_xp(ipart + (idim-1)*leading) + skip(idim)
           ii(idim) = int(xs * inv_dx_loc - 2*ix(idim))
        end do
        icell = 1
@@ -454,7 +459,7 @@ contains
     else
        ! Try ilevel - 1
        do idim = 1, 3
-          xs = star_xp(ipart + (idim-1)*leading) + d_skip(idim)
+          xs = star_xp(ipart + (idim-1)*leading) + skip(idim)
           ix(idim) = floor(xs * inv_4dx_loc)
        end do
        ix8 = int(ix(1), kind=8)
@@ -468,8 +473,8 @@ contains
 
        if (igrid > 0 .and. igrid <= ngridmax) then
           do idim = 1, 3
-             xs = star_xp(ipart + (idim-1)*leading) + d_skip(idim)
-             ii(idim) = int(xs * (0.5d0 * inv_dx_loc) - 2*ix(idim))
+             xs = star_xp(ipart + (idim-1)*leading) + skip(idim)
+             ii(idim) = int(xs * (0.5_dp * inv_dx_loc) - 2*ix(idim))
           end do
           icell = 1
           do idim = 1, 3
@@ -501,10 +506,10 @@ contains
     ekloss = dloss * 0.5_dp * (up**2 + vp**2 + wp**2)
     zloss = yield_SNII + (1.0_dp - yield_SNII) * star_zp(ipart)
     dzloss = dloss * zloss
-    num_sn = mejecta / M_SNII
+    num_sn = mejecta / m_SN
 
     ! Central cell properties
-    d = max(uold(icell, 1, igrid), real(smallr, kind=dp))
+    d = max(uold(icell, 1, igrid), smallr)
     u = uold(icell, 2, igrid) / d
     v = uold(icell, 3, igrid) / d
     w = uold(icell, 4, igrid) / d
@@ -543,7 +548,7 @@ contains
        star_mp(ipart) = star_mp(ipart) - mejecta
 
        ! Accumulate total ejecta mass
-       info = atomicadd(msn_loc_d, real(mejecta, kind=8))
+       info = atomicadd(msn_loc_d, mejecta)
     endif
 
     ! Each lane processes one of the 48 neighboring cells
@@ -604,7 +609,7 @@ contains
     endif
 
     Z_nei = z_ave * 0.02_dp
-    d_nei = max(uold(icelln, 1, igridn), real(smallr, kind=dp))
+    d_nei = max(uold(icelln, 1, igridn), smallr)
     if (metal) then
        Z_nei = uold(icelln, imetal, igridn) / d_nei
     endif
@@ -617,7 +622,7 @@ contains
     ! Compute critical mass ratio
     nH_nei = d_nei * scale_nH
     Zdepen = (max(0.01_dp, Z_nei / 0.02_dp))**(expZ_SN * 2.0_dp)
-    f_w_crit = (A_SN / 1.0e4_dp)**2.0_dp / (f_ESN * M_SNII) * num_sn**((expE_SN - 1.0_dp) * 2.0_dp) * nH_nei**(expN_SN * 2.0_dp) * Zdepen - 1.0_dp
+    f_w_crit = (A_SN / 1.0e4_dp)**2.0_dp / (f_ESN * M_SNII) * num_sn**((expE_SN - 1.0_dp) * 2.0_dp) * E_SNII_51**(2.0_dp * expE_SN - 1.0_dp) * nH_nei**(expN_SN * 2.0_dp) * Zdepen - 1.0_dp
     f_w_crit = max(0.0_dp, f_w_crit)
 
     ! Compute SN terminal velocity
