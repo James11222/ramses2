@@ -595,6 +595,12 @@ subroutine input_sink_ascii(mdl,r,g,p,npart_tot)
      p%tailp(r%levelmin-1)=0
   endif
 
+  ! Fields the file does not give: zero acceleration, and the merging
+  ! time and id of a new sink
+  if(allocated(p%fp))p%fp(1:p%npart,1:ndim)=0d0
+  if(allocated(p%tm))p%tm(1:p%npart)=-1000d0
+  if(allocated(p%idm))p%idm(1:p%npart)=0
+
 end subroutine input_sink_ascii
 !#########################################################################
 !#########################################################################
