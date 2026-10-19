@@ -1160,7 +1160,8 @@ subroutine update_metal_cooling(tables, aexp)
   ! This is a simple model to take into account the ionization background
   ! on metal cooling (calibrated using CLOUDY).
   ZZ=1d0/aexp-1d0
-  iZ=1+int(ZZ/z_courty(50)*49.)
+  ! Redshift bin of ZZ (z_courty is not evenly spaced)
+  iZ=1+count(z_courty(2:49)<=ZZ)
   iZ=min(iZ,49)
   iZ=max(iZ,1)
   deltaZ=z_courty(iZ+1)-z_courty(iZ)

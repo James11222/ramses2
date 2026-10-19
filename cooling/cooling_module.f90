@@ -896,7 +896,8 @@ subroutine cmp_metals(c,T2,nH,mu,metal_tot,metal_prime,aexp)
      if(ZZ.le.0.0.or.ZZ.ge.z_courty(50))then
         ux=0
      else
-        iZ=1+int(ZZ/z_courty(50)*49)
+        ! Redshift bin of ZZ (z_courty is not evenly spaced)
+        iZ=1+count(z_courty(2:49)<=ZZ)
         iZ=min(iZ,49)
         iZ=max(iZ,1)
         deltaZ=z_courty(iZ+1)-z_courty(iZ)
