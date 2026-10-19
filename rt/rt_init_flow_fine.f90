@@ -90,10 +90,12 @@ recursive subroutine r_rt_neq_updates(pst, nstep_coarse, input_size)
         call update_coolrates_tables(r, pst%s%tables, dble(g%aexp))
 
      if(r%rt .and. r%star .and. r%rt_advect .and. r%rt_star &
-        .and. r%sedprops_update.gt.0                        &
-        .and. mod(nstep_coarse,r%sedprops_update)==0)  then
+        .and. r%sedprops_update>0)then
+        ! The interval is tested first: mod(n,0) is undefined
+        if(mod(nstep_coarse,r%sedprops_update)==0)then
            ! Update cross sections based on evolving star properties
            call update_SED_group_props(r, g, s%SED, s%star)
+        endif
      endif
 
      ! Update radiation heating and cooling constants
