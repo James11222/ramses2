@@ -102,7 +102,7 @@ MODULE coolrates_module
 CONTAINS
 
 !XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-SUBROUTINE init_coolrates_tables(r, tables)
+SUBROUTINE init_coolrates_tables(r, tables, aexp)
 
   ! Initialise the cooling rates tables.
   !-------------------------------------------------------------------------
@@ -112,6 +112,7 @@ SUBROUTINE init_coolrates_tables(r, tables)
   implicit none
   type(run_t)::r
   type(neq_cooling_t)::tables
+  real(kind=8)::aexp
   !-------------------------------------------------------------------------
 #ifndef WITHOUTMPI
   integer::ierr
@@ -145,6 +146,8 @@ SUBROUTINE init_coolrates_tables(r, tables)
 
   do iT = myid+1, nbinT, ncpu ! Loop over TK and assign rates
      call comp_table_rates(r, tables, iT)
+     ! Compton rates at aexp (comp_table_rates leaves them out)
+     call update_table_rates(r, tables, iT, aexp)
   end do ! end TK loop
 
   ! Distribute the complete table between cpus ---------------------------

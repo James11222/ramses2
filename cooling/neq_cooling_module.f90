@@ -64,7 +64,7 @@ SUBROUTINE neq_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_si
   dasura=0.02d0
 
 !  call init_UV_background
-  call init_coolrates_tables(r, tables)
+  call init_coolrates_tables(r, tables, astart_sim)
   call updateRTGroups_CoolConstants(r, tables)
 
   if(r%nrestart==0 .and. r%cosmo)                                        &
