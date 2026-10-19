@@ -1181,6 +1181,14 @@ subroutine m_read_params(pst)
   endif
 
   !--------------------------------------------------
+  ! Check for cooling with non-equilibrium chemistry
+  !--------------------------------------------------
+  if(cooling.and.neq_chem.and..not.rt)then
+     write(*,*)'Error: neq_chem without rt needs cooling=.false.'
+     nml_ok=.false.
+  endif
+
+  !--------------------------------------------------
   ! Compute indices for passive scalars
   ! and non-thermal energies
   !--------------------------------------------------
