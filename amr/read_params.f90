@@ -1068,6 +1068,23 @@ subroutine m_read_params(pst)
 118 continue
   close(1)
 
+
+  !--------------------------------------------------
+  ! Check for totals read after their maximum is set
+  !--------------------------------------------------
+  if(nstartot/=0)then
+     write(*,*)'Error: nstartot has no effect; set nstarmax (per cpu) in &STAR_PARAMS'
+     nml_ok=.false.
+  endif
+  if(nsinktot/=0)then
+     write(*,*)'Error: nsinktot has no effect; set nsinkmax (per cpu) in &SINK_PARAMS'
+     nml_ok=.false.
+  endif
+  if(ntreetot/=0)then
+     write(*,*)'Error: ntreetot has no effect; set ntreemax (per cpu) in &CLUMP_PARAMS'
+     nml_ok=.false.
+  endif
+
   ! Compute maximum number of tracer particles
   if(ntracmax==0)then
      ntracmax=int(ntractot/int(s%g%ncpu,kind=8),kind=4)
