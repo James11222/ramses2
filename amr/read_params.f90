@@ -1048,6 +1048,10 @@ subroutine m_read_params(pst)
   rewind(1)
   read(1,NML=cooling_params,END=107)
 107 continue
+  if(eos_type<1.or.eos_type>5)then
+     write(*,*)'Error: eos_type must be 1 to 5, not ',eos_type
+     call mdl_abort(s%mdl)
+  endif
   rewind(1)
   read(1,NML=star_params,END=108)
 108 continue
