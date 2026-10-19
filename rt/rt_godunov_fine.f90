@@ -203,7 +203,7 @@ subroutine set_rtuold(r, g, m, ilevel)
 #ifdef DO_RT
   if(.not.r%neq_chem)then
      do ig=1,nrtgrp
-        iN=1+(ig-1)*ndim
+        iN=1+(ig-1)*(ndim+1)
         do i=m%head(ilevel),m%tail(ilevel)
            m%rtunew(1:twotondim,iN,i)=m%rtunew(1:twotondim,iN,i) + &
                 & m%emissivity(1:twotondim,ig,i)*g%dtnew(ilevel)
@@ -222,7 +222,7 @@ subroutine set_rtuold(r, g, m, ilevel)
 
   ! Make a photon conservation fix (prevent light explosions)
   do ig = 1, nrtgrp
-      iN = 1 + (ig-1)*ndim
+      iN = 1 + (ig-1)*(ndim+1)
       do i = m%head(ilevel), m%tail(ilevel)
         do j = 1, twotondim
           ! No negative photon densities:
