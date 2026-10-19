@@ -58,7 +58,6 @@ module mdl_parameters
      enumerator::MDL_KICK_DRIFT_PART
      enumerator::MDL_MASS_MIN_PART
      enumerator::MDL_BROADCAST_MP_MIN
-     enumerator::MDL_BROADCAST_NSTEP
      enumerator::MDL_COLLECT_MULTIPOLE
      enumerator::MDL_BROADCAST_MULTIPOLE
      enumerator::MDL_OUTPUT_AMR

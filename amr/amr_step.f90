@@ -18,7 +18,6 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
   use force_fine_module, only: m_force_fine
 #endif
   use move_fine_module, only: m_kick_drift_part
-  use newdt_fine_module, only: m_broadcast_nstep
   use output_amr_module, only: m_dump_all
   use synchro_hydro_fine_module, only: m_synchro_hydro_fine, r_gravity_hydro_fine
   use source_hydro_fine_module, only: r_source_hydro_fine
@@ -85,11 +84,6 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
         call m_refine_fine(pst,ilevel)
      endif
   endif
-
-  !-------------------------------------------------
-  ! Broadcast the step counters to all cpus
-  !-------------------------------------------------
-  if(ilevel==r%levelmin.and.icount==1)call m_broadcast_nstep(pst)
 
   !-------------------------
   ! Sink formation in clumps
@@ -313,12 +307,10 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
         ! Update time variable
         call m_timer('update time','start')
         call m_update_time(pst,ilevel,done)
-        call m_broadcast_nstep(pst)
      end if
   else
      call m_timer('update time','start')
      call m_update_time(pst,ilevel,done)
-     call m_broadcast_nstep(pst)
   end if
   if (done)return
 
