@@ -240,13 +240,13 @@ subroutine file_descriptor_hydro(r,filename,write_bkp_file)
 #if NENER>0
      ! Non-thermal pressures
      do ivar=6,5+nener
-        write(ilun,'("variable #",I2,": non_thermal_energy_",I1)')ivar,ivar-5
+        write(ilun,'("variable #",I2,": non_thermal_energy_",I0)')ivar,ivar-5
      end do
 #endif
 #if NVAR>5+NENER
      ! Passive scalars
      do ivar=6+nener,nvar
-        write(ilun,'("variable #",I2,": density_scalar_",I1)')ivar,ivar-5-nener
+        write(ilun,'("variable #",I2,": density_scalar_",I0)')ivar,ivar-5-nener
      end do
 #endif
 #ifdef MHD
@@ -287,7 +287,7 @@ subroutine file_descriptor_hydro(r,filename,write_bkp_file)
 #if NENER>0
      ! Non-thermal pressures
      do ivar=ie+1,ie+nener
-        write(ilun,'("variable #",I2,": non_thermal_pressure_",I1)')ivar,ivar-ie
+        write(ilun,'("variable #",I2,": non_thermal_pressure_",I0)')ivar,ivar-ie
      end do
 #endif
 #if NVAR>5+NENER
@@ -303,7 +303,7 @@ subroutine file_descriptor_hydro(r,filename,write_bkp_file)
         else if (r%sgs_turb.and.ivar+5-ie.eq.r%iturb)then
            write(ilun,'("variable #",I2,": turb_kinetic_energy")')ivar
            ivar=ivar+1
-        else if(ivar+5-ie.ge.r%iions.and.ivar+5-ie.lt.r%iions+nion) then
+        else if(r%neq_chem.and.ivar+5-ie.ge.r%iions.and.ivar+5-ie.lt.r%iions+nion) then
           ! Special cases for ionisation fractions
           if(r%ixHI.gt.0) then
             write(ilun,'("variable #",I2,": xHI")')ivar
@@ -326,7 +326,7 @@ subroutine file_descriptor_hydro(r,filename,write_bkp_file)
             ivar=ivar+1
           end do
         else
-          write(ilun,'("variable #",I2,": scalar_",I1)')ivar,ivar-ie-nener
+          write(ilun,'("variable #",I2,": scalar_",I0)')ivar,ivar-ie-nener
           ivar=ivar+1
         endif
      end do
