@@ -855,21 +855,20 @@ subroutine m_read_params(pst)
   !-------------------------------------------------
   ! Compute time step for outputs
   !-------------------------------------------------
-  ! Count the outputs up to round-off; the last one is tend (aend) exactly
   if(tend>0)then
      if(delta_tout==0)delta_tout=tend
-     noutput=MIN(int(tend/delta_tout+1d-6),MAXOUT)
+     noutput=MAX(1,MIN(nint(tend/delta_tout),MAXOUT))
      do i=1,noutput
         tout(i)=dble(i)*delta_tout
      end do
-     if(noutput>0.and.abs(tend/delta_tout-dble(noutput))<1d-6)tout(noutput)=tend
+     tout(noutput)=tend
   else if(aend>0)then
      if(delta_aout==0)delta_aout=aend
-     noutput=MIN(int(aend/delta_aout+1d-6),MAXOUT)
+     noutput=MAX(1,MIN(nint(aend/delta_aout),MAXOUT))
      do i=1,noutput
         aout(i)=dble(i)*delta_aout
      end do
-     if(noutput>0.and.abs(aend/delta_aout-dble(noutput))<1d-6)aout(noutput)=aend
+     aout(noutput)=aend
   endif
   noutput=max(count(aout>0.and.aout<=1),count(tout>0))
   noutput=MIN(noutput,MAXOUT)
