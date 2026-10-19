@@ -99,6 +99,7 @@ function worker_init(mdl) result(pst)
   use flag_utils, only: r_init_flag, r_ensure_ref_rules, r_ensure_subgrid, r_user_flag
   use init_amr_module, only: r_init_amr, r_set_add
   use params_module, only: r_broadcast_params,r_broadcast_global
+  use newdt_fine_module, only: r_broadcast_nstep
   use init_time_module, only: r_init_time
   use init_hydro_module, only: r_init_hydro
   use init_part_module, only: r_init_part, r_deallocate_gas
@@ -316,6 +317,7 @@ function worker_init(mdl) result(pst)
   call mdl_add_service(pst%s%mdl,MDL_CMP_RESIDUAL_NORM2,     pst,C_FUNLOC(r_cmp_residual_norm2),1,2,"cmp_residual_norm2")
   call mdl_add_service(pst%s%mdl,MDL_CMP_RHS_NORM2,          pst,C_FUNLOC(r_cmp_rhs_norm2),1,2,"cmp_rhs_norm2")
 #endif
+  call mdl_add_service(pst%s%mdl,MDL_BROADCAST_NSTEP,        pst,C_FUNLOC(r_broadcast_nstep),2,0,"broadcast_nstep")
   call mdl_add_service(pst%s%mdl,MDL_INIT_RT,                pst,C_FUNLOC(r_init_rt),0,0,"init_rt")
   call mdl_add_service(pst%s%mdl,MDL_RT_UPLOAD_FINE,         pst,C_FUNLOC(r_rt_upload_fine),1,0,"rt_upload_fine")
   call mdl_add_service(pst%s%mdl,MDL_RT_INPUT_CONDINIT,      pst,C_FUNLOC(r_rt_input_condinit),1,0,"rt_input_condinit")

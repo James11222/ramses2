@@ -327,4 +327,47 @@ end subroutine r_broadcast_dt
 !#####################################################################
 !#####################################################################
 !#####################################################################
+subroutine m_broadcast_nstep(pst)
+  use ramses_commons, only: pst_t
+  implicit none
+  type(pst_t)::pst
+  !--------------------------------------------------------------------
+  ! This routine sends the master's step counters to all cpus.
+  !--------------------------------------------------------------------
+  integer,dimension(1:2)::input
+
+  input(1)=pst%s%g%nstep
+  input(2)=pst%s%g%nstep_coarse
+  call r_broadcast_nstep(pst,input,2)
+
+end subroutine m_broadcast_nstep
+!#####################################################################
+!#####################################################################
+!#####################################################################
+!#####################################################################
+recursive subroutine r_broadcast_nstep(pst,input,input_size)
+  use mdl_module, only: mdl_send_request, mdl_get_reply
+  use ramses_commons, only: pst_t
+  use mdl_parameters, only: MDL_BROADCAST_NSTEP
+  implicit none
+  type(pst_t)::pst
+  integer,VALUE::input_size
+  integer,dimension(1:input_size)::input
+
+  integer::rID
+
+  if(pst%nLower>0)then
+     rID = mdl_send_request(pst%s%mdl,MDL_BROADCAST_NSTEP,pst%iUpper+1,input_size,0,input)
+     call r_broadcast_nstep(pst%pLower,input,input_size)
+     call mdl_get_reply(pst%s%mdl,rID,0)
+  else
+     pst%s%g%nstep=input(1)
+     pst%s%g%nstep_coarse=input(2)
+  endif
+
+end subroutine r_broadcast_nstep
+!#####################################################################
+!#####################################################################
+!#####################################################################
+!#####################################################################
 end module newdt_fine_module
