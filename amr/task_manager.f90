@@ -54,18 +54,23 @@ contains
 !##############################################################
 !##############################################################
 !##############################################################
-recursive subroutine r_clean_stop(pst)
+recursive subroutine r_clean_stop(pst,input,input_size,output,output_size)
   use mdl_module
   use ramses_commons, only: pst_t
   use mdl_parameters
   implicit none
   type(pst_t)::pst
+  integer,VALUE::input_size
+  integer,optional::output_size
+  type(*)::input
+  type(*),optional::output
 
   integer::rID
+  integer::dummy_input,dummy_output
 
   if(pst%nLower>0)then
      rID = mdl_send_request(pst%s%mdl,MDL_CLEAN_STOP,pst%iUpper+1)
-     call r_clean_stop(pst%pLower)
+     call r_clean_stop(pst%pLower,dummy_input,0,dummy_output,0)
      call mdl_get_reply(pst%s%mdl,rID,0)
   endif
 
@@ -78,9 +83,10 @@ subroutine master(pst)
   use init_amr_module, only: r_set_add
   implicit none
   type(pst_t)::pst
+  integer::dummy_input,dummy_output
   call r_set_add(pst,mdl_threads(pst%s%mdl),1)
   call adaptive_loop(pst)
-  call r_clean_stop(pst)
+  call r_clean_stop(pst,dummy_input,0,dummy_output,0)
 end subroutine master
 !##############################################################
 !##############################################################
@@ -355,6 +361,7 @@ subroutine mdl_wait(pst)
   use ramses_commons, only: pst_t
   use call_back, only: call_back_f, ramses_function
   use mdl_module
+  use mdl_parameters, only: MDL_CLEAN_STOP
   USE, INTRINSIC :: ISO_C_BINDING, ONLY: C_F_PROCPOINTER, C_PTR, C_LOC, C_F_POINTER
 #ifndef WITHOUTMPI
   use mpi
@@ -411,11 +418,16 @@ subroutine mdl_wait(pst)
         allocate(output_array(1:output_size))
         output_array=0
 
-        ! Launch the corresponding call-back function
-        call c_f_pointer(c_loc(input_array),ipar)
-        call c_f_pointer(c_loc(output_array),opar)
-        CALL C_F_PROCPOINTER (mdl%callback(function_id), mdl_function)
-        call mdl_function(pst,ipar,input_size,opar,output_size)
+        ! CLEAN_STOP is called directly: its registered procedure is internal
+        ! to mdl_init and no longer valid once mdl_init has returned
+        if(function_id==MDL_CLEAN_STOP)then
+           call worker_clean_stop(pst)
+        else
+           call c_f_pointer(c_loc(input_array),ipar)
+           call c_f_pointer(c_loc(output_array),opar)
+           CALL C_F_PROCPOINTER (mdl%callback(function_id), mdl_function)
+           call mdl_function(pst,ipar,input_size,opar,output_size)
+        endif
 
         ! Deallocate input array
         deallocate(input_array)
@@ -443,6 +455,22 @@ subroutine mdl_wait(pst)
   end associate
 
 #endif
+
+contains
+  !##############################################################
+  recursive subroutine worker_clean_stop(pst_local)
+    use ramses_commons, only: pst_t
+    use mdl_module, only: mdl_send_request,mdl_get_reply
+    use mdl_parameters, only: MDL_CLEAN_STOP
+    implicit none
+    type(pst_t)::pst_local
+    integer::rID
+    if(pst_local%nLower>0)then
+       rID=mdl_send_request(pst_local%s%mdl,MDL_CLEAN_STOP,pst_local%iUpper+1)
+       call worker_clean_stop(pst_local%pLower)
+       call mdl_get_reply(pst_local%s%mdl,rID,0)
+    endif
+  end subroutine worker_clean_stop
 
 end subroutine mdl_wait
 !##############################################################
