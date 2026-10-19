@@ -71,8 +71,8 @@ subroutine m_refine_fine(pst,ilevel)
   ! Get maximum used memory (only in master)
   call r_noct_used_max(pst,ilevel,1,s%m%noct_used_max,1)
 
-  ! Balance particles across cpus
-  if(mdl_threads(s%mdl)>1.AND.ilevel==s%r%levelmin)then
+  ! Balance particles across cpus every nremap coarse steps (never if nremap<=0)
+  if(mdl_threads(s%mdl)>1.AND.ilevel==s%r%levelmin.AND.s%r%nremap>0)then
      if(s%r%pic.AND.mod(s%g%nstep_coarse,s%r%nremap)==0.AND.s%g%nstep_coarse>0)then
         write(*,*)'Load balancing particle distribution'
         ttstart = mdl_wtime(s%mdl)
