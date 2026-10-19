@@ -147,7 +147,7 @@ subroutine refine_fine(s,ilevel,ncreate,nkill)
   use hydro_parameters, only: nvar, nion
   use rt_parameters, only: nrtvar
   use cr_parameters, only: ncruvar
-#ifndef RTZ
+#ifndef DO_RTZ
   use init_xion_module, only: calc_equilibrium_xion
 #endif
   implicit none
@@ -245,7 +245,7 @@ subroutine refine_fine(s,ilevel,ncreate,nkill)
   end do
   ncreate=g%ncreate
 
-#ifndef RTZ
+#ifndef DO_RTZ
 #ifdef HYDRO
   if(r%neq_chem .and. r%upload_equilibrium_x) then
      ! Enforce equilibrium on ionization states when derefining, to

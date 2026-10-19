@@ -126,7 +126,7 @@ subroutine m_read_rt_params(pst)
   ! Set defaults for radiation groups
   !--------------------------------------------------
 #if NRTGRP>0
-#ifndef RTZ
+#ifndef DO_RTZ
   !  Use H2, HI, HeI, HeII ionization energies  as default group intervals
   group_L0(1:min(nrtgrp,nion))=ionEvs(1:min(nrtgrp,nion))   ! Lower bounds
   group_L1(1:min(nrtgrp,nion-1))=ionEvs(2:min(nrtgrp+1,nion)) ! Upper bnds

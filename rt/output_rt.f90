@@ -247,7 +247,7 @@ subroutine write_group_props(r, update, lun)
   end if
   write(lun, 901) r%group_L0(:)
   write(lun, 902) r%group_L1(:)
-#ifndef RTZ
+#ifndef DO_RTZ
   write(lun, 903) r%spec2group(:)
 #endif
   do ip = 1, nrtgrp
