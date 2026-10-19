@@ -109,9 +109,10 @@ contains
 #ifndef WITHOUTMPI
     include 'mpif.h'
     integer::info
-    call MPI_ABORT(MPI_COMM_WORLD,info)
+    ! Abort with error code 1
+    call MPI_ABORT(MPI_COMM_WORLD,1,info)
 #else
-    stop
+    stop 1
 #endif
   end subroutine mdl_abort
   !##############################################################
