@@ -896,18 +896,6 @@ subroutine m_read_params(pst)
   nlevelmax=levelmax
   nsuperoct=MIN(nsuperoct,5)
   nml_ok=.true.
-  !--------------------------------------------------
-  ! Check for the output cadence
-  !--------------------------------------------------
-  if(foutput<=0)then
-     if(noutput>0.or.delta_tout>0.or.delta_aout>0)then
-        write(*,*)'Error: scheduled outputs need foutput>0'
-        write(*,*)'Keep the default foutput to write no step-cadence outputs'
-        nml_ok=.false.
-     else if(s%g%myid==1)then
-        write(*,*)'WARNING: foutput<=0 and no output schedule: no output will be written'
-     endif
-  endif
   if(levelmin<1)then
      write(*,*)'Error in the namelist:'
      write(*,*)'levelmin should not be lower than 1 !!!'
