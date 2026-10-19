@@ -116,6 +116,12 @@ subroutine input_part_gadget(s,mstar,mgas,mhalo,npart_star,npart_gas,npart_halo)
   associate(r=>s%r,g=>s%g,m=>s%m,p=>s%p,gas=>s%gas,mdl=>s%mdl,star=>s%star)
 
   ! Reading header of the Gadget file
+  ! Check the length of the joined initfile/ic_file path
+  if(len_trim(r%initfile(r%levelmin))+1+len_trim(r%ic_file)>flen)then
+     if(g%myid==1)write(*,'(A,I0,A)')'initfile/ic_file path is longer than ',flen, &
+          & ' characters; increase flen in amr_parameters.f90'
+     stop
+  endif
   filename = TRIM(r%initfile(r%levelmin))//'/'//TRIM(r%ic_file)
   INQUIRE(FILE=filename,EXIST=file_exist)
   if(.not.file_exist) then

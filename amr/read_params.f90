@@ -211,7 +211,7 @@ subroutine m_read_params(pst)
   ! Initial condition files for each level
   logical::multiple=.false.
   character(LEN=20)::filetype='ascii'
-  character(LEN=80),dimension(1:MAXLEVEL)::initfile=' '
+  character(LEN=flen),dimension(1:MAXLEVEL)::initfile=' '
   real(kind=8)::ic_scale_l=1.0d0
   real(kind=8)::ic_scale_v=1.0d0
   real(kind=8)::ic_scale_m=1.0d0
@@ -810,6 +810,12 @@ subroutine m_read_params(pst)
      call mdl_abort(s%mdl)
   END IF
   CALL getarg(1,infile)
+  call get_command_argument(1,length=i)
+  if(i>len(infile))then
+     write(*,'(A,I0,A)')'Error: the namelist path is longer than ',len(infile), &
+          & ' characters; increase flen in amr_parameters.f90'
+     call mdl_abort(s%mdl)
+  endif
 
   !-------------------------------------------------
   ! Read the namelist
@@ -1114,6 +1120,18 @@ subroutine m_read_params(pst)
      exp_refine(i)= 2.0
      initfile  (i)= ' '
      jeans_refine(i)=-1.0
+  end do
+
+  !-----------------------------------
+  ! Check the length of initfile
+  !-----------------------------------
+  do i=levelmin,nlevelmax
+     if(len_trim(initfile(i))>flen-flen_tail)then
+        write(*,'(A,I0,A,I0,A)')'Error: initfile(',i-levelmin+1,') is longer than ', &
+             & flen-flen_tail,' characters; increase flen in amr_parameters.f90'
+        write(*,'(A)')'  '//TRIM(initfile(i))
+        nml_ok=.false.
+     endif
   end do
 
   !--------------------------------------------------

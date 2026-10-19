@@ -24,7 +24,9 @@ module amr_parameters
 #else
   integer,parameter::i8b=8  ! longint particle IDs are long int
 #endif
-  integer,parameter::flen=80
+  ! Length of a file path, and room for the name a reader appends to a directory
+  integer,parameter::flen=512
+  integer,parameter::flen_tail=64
 
   ! Number of dimensions
 #ifndef NDIM

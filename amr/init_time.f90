@@ -120,6 +120,7 @@ end subroutine init_time
 !###########################################################
 !###########################################################
 subroutine init_file(mdl,r,g,m)
+  use amr_parameters, only: flen
   use amr_commons, only: run_t,global_t,mesh_t
   use mdl_module
   implicit none
@@ -134,7 +135,7 @@ subroutine init_file(mdl,r,g,m)
   !------------------------------------------------------
   integer:: ilevel
   real(kind=4)::dxini0,xoff10,xoff20,xoff30,astart0,omega_m0,omega_l0,h00
-  character(LEN=80)::filename
+  character(LEN=flen)::filename
   logical::ok
 
   if(r%verbose)write(*,*)'Entering init_file'
@@ -212,7 +213,7 @@ end subroutine init_file
 !###########################################################
 !###########################################################
 subroutine init_cosmo(mdl,r,g)
-  use amr_parameters, only: ndim
+  use amr_parameters, only: ndim,flen
   use amr_commons, only: run_t,global_t
   use gadgetreadfilemod
   use mdl_module
@@ -228,7 +229,7 @@ subroutine init_cosmo(mdl,r,g)
   !------------------------------------------------------
   integer:: ilevel,i
   real(kind=4)::dxini0,xoff10,xoff20,xoff30,astart0,omega_m0,omega_l0,h00
-  character(LEN=80)::filename
+  character(LEN=flen)::filename
   character(LEN=5)::nchar
   logical::ok
   TYPE(gadgetheadertype) :: gadgetheader

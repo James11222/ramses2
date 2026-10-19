@@ -211,7 +211,7 @@ end subroutine r_input_part_ascii
 !#########################################################################
 subroutine input_part_ascii(mdl,r,g,p,npart_tot)
   use mdl_module
-  use amr_parameters, only: ndim
+  use amr_parameters, only: ndim, flen
   use amr_commons, only: run_t,global_t
   use pm_commons, only: part_t
   implicit none
@@ -233,7 +233,7 @@ subroutine input_part_ascii(mdl,r,g,p,npart_tot)
   integer(kind=8)::jpart,npart,nremain
   integer(kind=8),dimension(1:g%ncpu+1)::start_ind
   real(kind=8)::xx1,xx2,xx3,vv1,vv2,vv3,mm1
-  character(LEN=80)::filename
+  character(LEN=flen)::filename
 
   !--------------------------------------
   ! Compute starting index for each cpu
@@ -349,7 +349,7 @@ end subroutine r_input_star_ascii
 !#########################################################################
 subroutine input_star_ascii(mdl,r,g,p,npart_tot)
   use mdl_module
-  use amr_parameters, only: ndim
+  use amr_parameters, only: ndim, flen
   use amr_commons, only: run_t,global_t
   use pm_commons, only: part_t
   implicit none
@@ -371,7 +371,7 @@ subroutine input_star_ascii(mdl,r,g,p,npart_tot)
   integer(kind=8)::jpart,npart,nremain
   integer(kind=8),dimension(1:g%ncpu+1)::start_ind
   real(kind=8)::xx1,xx2,xx3,vv1,vv2,vv3,mm1,zz1,tt1
-  character(LEN=80)::filename
+  character(LEN=flen)::filename
 
   !--------------------------------------
   ! Compute starting index for each cpu
@@ -489,7 +489,7 @@ end subroutine r_input_sink_ascii
 !#########################################################################
 subroutine input_sink_ascii(mdl,r,g,p,npart_tot)
   use mdl_module
-  use amr_parameters, only: ndim
+  use amr_parameters, only: ndim, flen
   use amr_commons, only: run_t,global_t
   use pm_commons, only: part_t
   implicit none
@@ -511,7 +511,7 @@ subroutine input_sink_ascii(mdl,r,g,p,npart_tot)
   integer(kind=8)::jpart,npart,nremain
   integer(kind=8),dimension(1:g%ncpu+1)::start_ind
   real(kind=8)::xx1,xx2,xx3,vv1,vv2,vv3,mm1,zz1,tt1,jj1,jj2,jj3
-  character(LEN=80)::filename
+  character(LEN=flen)::filename
 
   !--------------------------------------
   ! Compute starting index for each cpu
