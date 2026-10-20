@@ -186,7 +186,7 @@ gpu_feedback.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
 gpu_flag.o: amr_parameters.o gpu_feedback.o gpu_utils.o hydro_parameters.o oct_commons.o
 gpu_hilbert.o: amr_parameters.o hilbert.o
 gpu_hydro.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
-gpu_manager.o: amr_parameters.o gpu_part.o gpu_refine.o gpu_runner.o gpu_utils.o hydro_parameters.o mdl.o mdl_commons.o ramses_commons.o turb_commons.o
+gpu_manager.o: amr_parameters.o gpu_refine.o gpu_runner.o gpu_utils.o hydro_parameters.o mdl.o mdl_commons.o ramses_commons.o turb_commons.o
 gpu_mg.o: amr_parameters.o gpu_utils.o hydro_parameters.o oct_commons.o
 gpu_mpi.o: amr_parameters.o cache.o cache_commons.o gpu_hydro.o gpu_utils.o hash.o hydro_commons.o hydro_parameters.o marshal.o mdl.o nbors_utils.o oct_commons.o ramses_commons.o
 gpu_nbor.o: amr_parameters.o gpu_utils.o oct_commons.o

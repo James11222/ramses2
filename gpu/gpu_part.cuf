@@ -9,8 +9,6 @@ module part_device
        & box_ckey_min, box_ckey_max, box_size, periodic, &
        & rho, nref, f, &
        & swap_local, swap_global, prefix_sum, &
-       & partial_sums_0, partial_sums_1, partial_sums_2, &
-       & partial_sums_dp_0, partial_sums_dp_1, partial_sums_dp_2, &
        & xp, vp, mp, phip, levelp, sortp, idp, &
        & star_xp, star_vp, star_mp, star_tp, star_zp, star_phip, &
        & star_levelp, star_sortp, star_idp, &
@@ -39,88 +37,6 @@ contains
   include 'gpu_hash.cuf'
   include 'gpu_hilbert.cuf'
   include 'gpu_reduce.cuf'
-
-!> Grow scan buffers to at least min_capacity.
-subroutine ensure_scan_capacity_part(min_capacity, part_dep_algo)
-  implicit none
-  integer(kind=4), intent(in) :: min_capacity, part_dep_algo
-  integer(kind=4), parameter :: block_size = 256
-  integer(kind=4) :: gs0, gs1, gs2
-
-  if (min_capacity <= 0) return
-
-  if (allocated(prefix_sum)) then
-     if (size(prefix_sum) < min_capacity) then
-        deallocate(prefix_sum)
-        allocate(prefix_sum(1:min_capacity))
-     endif
-  else
-     allocate(prefix_sum(1:min_capacity))
-  endif
-
-  gs0 = max(1, (min_capacity + block_size - 1) / block_size)
-  gs1 = max(1, (gs0 + block_size - 1) / block_size)
-  gs2 = max(1, (gs1 + block_size - 1) / block_size)
-
-  if (allocated(partial_sums_0)) then
-     if (size(partial_sums_0) < gs0) then
-        deallocate(partial_sums_0)
-        allocate(partial_sums_0(1:gs0))
-     endif
-  else
-     allocate(partial_sums_0(1:gs0))
-  endif
-
-  if (allocated(partial_sums_1)) then
-     if (size(partial_sums_1) < gs1) then
-        deallocate(partial_sums_1)
-        allocate(partial_sums_1(1:gs1))
-     endif
-  else
-     allocate(partial_sums_1(1:gs1))
-  endif
-
-  if (allocated(partial_sums_2)) then
-     if (size(partial_sums_2) < gs2) then
-        deallocate(partial_sums_2)
-        allocate(partial_sums_2(1:gs2))
-     endif
-  else
-     allocate(partial_sums_2(1:gs2))
-  endif
-
-  ! Real(dp) partial-sum workspace, mirroring the integer tiers above. Used by
-  ! the DM CIC small-stencil deposit's per-offset gpu_scan_dp passes.
-  if (part_dep_algo == 3) then
-     if (allocated(partial_sums_dp_0)) then
-        if (size(partial_sums_dp_0) < gs0) then
-           deallocate(partial_sums_dp_0)
-           allocate(partial_sums_dp_0(1:gs0))
-        endif
-     else
-        allocate(partial_sums_dp_0(1:gs0))
-     endif
-
-     if (allocated(partial_sums_dp_1)) then
-        if (size(partial_sums_dp_1) < gs1) then
-           deallocate(partial_sums_dp_1)
-           allocate(partial_sums_dp_1(1:gs1))
-        endif
-     else
-        allocate(partial_sums_dp_1(1:gs1))
-     endif
-
-     if (allocated(partial_sums_dp_2)) then
-        if (size(partial_sums_dp_2) < gs2) then
-           deallocate(partial_sums_dp_2)
-           allocate(partial_sums_dp_2(1:gs2))
-        endif
-     else
-        allocate(partial_sums_dp_2(1:gs2))
-     endif
-   endif
-
-end subroutine ensure_scan_capacity_part
 
 !> Bucket 0/1 from hash lookup and leaf/refined test.
 attributes(global) subroutine bucket_part_kernel(xp, bucket_part_d, &
