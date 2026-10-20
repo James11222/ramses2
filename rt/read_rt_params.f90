@@ -23,7 +23,7 @@ subroutine m_read_rt_params(pst)
   !--------------------------------------------------
   ! Local variables
   !--------------------------------------------------
-  character(LEN=80)::infile
+  character(LEN=flen)::infile
   logical::nml_ok, rt_vsla=.false.
 
   !--------------------------------------------------

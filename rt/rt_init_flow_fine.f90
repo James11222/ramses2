@@ -4,7 +4,7 @@
 !#########################################################################
 subroutine m_rt_init_flow_fine(pst,ilevel)
   use amr_commons, only: ndim
-  use amr_parameters, only: nvector, twotondim
+  use amr_parameters, only: nvector, twotondim, flen
   use ramses_commons, only: pst_t
   use rt_input_condinit_module, only: r_rt_input_condinit
   use rt_parameters, only: nrtgrp
@@ -16,7 +16,7 @@ subroutine m_rt_init_flow_fine(pst,ilevel)
   ! condition for RT variables into the exisiting AMR structure from an
   ! analytical model given as an external routine.
   !--------------------------------------------------------------------
-  character(len=80)::filename
+  character(len=flen)::filename
   logical::ok_file1,ok_file2,ok_file
 
   associate(s=>pst%s,r=>pst%s%r,m=>pst%s%m)

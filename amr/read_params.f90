@@ -23,7 +23,7 @@ subroutine m_read_params(pst)
   ! Local variables
   !--------------------------------------------------
   integer::i,narg,levelmax
-  character(LEN=80)::infile
+  character(LEN=flen)::infile
   character(LEN=80)::cmdarg
   integer(kind=8)::ngridtot=0
   integer(kind=8)::nparttot=0

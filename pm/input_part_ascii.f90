@@ -7,6 +7,7 @@ contains
 !#########################################################################
 subroutine m_input_part_ascii(pst)
   use ramses_commons, only: pst_t
+  use amr_parameters, only: flen
   implicit none
   type(pst_t)::pst
   !--------------------------------------------------------------------
@@ -15,7 +16,7 @@ subroutine m_input_part_ascii(pst)
   !--------------------------------------------------------------------
   real(kind=8)::xx1,xx2,xx3,vv1,vv2,vv3,mm1,zz1,tt1,jj1,jj2,jj3
   integer(kind=8)::npart_tot,nstar_tot,nsink_tot
-  character(LEN=80)::filename
+  character(LEN=flen)::filename
   integer,allocatable,dimension(:)::input_array
   logical::file_exist
 

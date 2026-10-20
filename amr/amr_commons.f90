@@ -282,7 +282,7 @@ module amr_commons
      ! Initial condition files for each level
      character(LEN=20)::filetype='ascii'
      logical::multiple=.false.
-     character(LEN=80),dimension(1:MAXLEVEL)::initfile=' '
+     character(LEN=flen),dimension(1:MAXLEVEL)::initfile=' '
      real(kind=8)::ic_scale_l=1.0d0
      real(kind=8)::ic_scale_v=1.0d0
      real(kind=8)::ic_scale_m=1.0d0
