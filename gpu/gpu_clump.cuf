@@ -2135,7 +2135,7 @@ contains
     grid_size_part = (sim%p%npart + block_size - 1) / block_size
 
     ! Loop over merging hierarchy levels
-    do ilevel = 0, sim%c%merge_levelmax
+    do ilevel = 0, sim%c%merge_levelmax+1
        call particle_unbind_kernel<<<grid_size_part, block_size>>>( &
             & xp, vp, pid, lev_peak_d, new_peak_d, clump_rad_d, clump_mass_d, &
             & peak_pos_d, peak_vel_d, phi_clump_d, real(sim%c%mass_threshold, kind=dp), periodic, &

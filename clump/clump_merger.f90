@@ -2088,7 +2088,7 @@ subroutine particle_unbind(s,p)
   call quick_sort_int_int(p%workp(1),p%sortp(1),p%npart)
 
   ! Loop over merging hierarchy levels
-  do ilevel=0,c%merge_levelmax
+  do ilevel=0,c%merge_levelmax+1
      ! Demote particles to parent clump if unbound
      call open_cache_clump(mdl, c, storage_size(dummy_unbind_clump)/32, &
           pack=pack_fetch_unbind, unpack=unpack_fetch_unbind)
