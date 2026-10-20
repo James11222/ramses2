@@ -36,7 +36,7 @@ recursive subroutine r_cooling_fine(pst,ilevel,input_size)
 #endif
 
      ! Compute new cooling table for cosmo runs
-#ifndef RTZ
+#ifndef DO_RTZ
      if(pst%s%r%cooling.and.ilevel==pst%s%r%levelmin.and.pst%s%r%cosmo)then
         if (cooling_needs_update(pst%s%cool, dble(pst%s%g%aexp))) then
            if(pst%s%g%myid==1)write(*,*)'Computing new cooling table'

@@ -896,9 +896,10 @@ subroutine cmp_metals(c,T2,nH,mu,metal_tot,metal_prime,aexp)
      if(ZZ.le.0.0.or.ZZ.ge.z_courty(50))then
         ux=0
      else
-        iZ=1+int(ZZ/z_courty(50)*49)
-        iZ=min(iZ,49)
-        iZ=max(iZ,1)
+        iZ=1
+        do while(ZZ>z_courty(iZ+1).and.iZ<49)
+           iZ=iZ+1
+        end do
         deltaZ=z_courty(iZ+1)-z_courty(iZ)
         ux=1d-4*(phi_courty(iZ+1)*(ZZ-z_courty(iZ))/deltaZ &
              & + phi_courty(iZ)*(z_courty(iZ+1)-ZZ)/deltaZ )/nH

@@ -120,7 +120,7 @@ end subroutine r_input_part_grafic
 !#########################################################################
 !#########################################################################
 subroutine input_part_grafic(r,g,p,npart_tot)
-  use amr_parameters, only: ndim, twotondim
+  use amr_parameters, only: ndim, twotondim, flen
   use amr_commons, only: run_t, global_t
   use pm_commons, only: part_t
   implicit none
@@ -140,7 +140,7 @@ subroutine input_part_grafic(r,g,p,npart_tot)
   integer(kind=8)::ipart_grafic
   integer(kind=8),dimension(1:g%ncpu+1)::start_ind
   real(kind=4),dimension(:,:),allocatable::init_plane,init_plane_x,init_plane_m
-  character(LEN=80)::filename,filename_x,filename_m
+  character(LEN=flen)::filename,filename_x,filename_m
   character(LEN=5)::nchar
   logical::ok,error,keep_part,read_pos=.false.,read_mass=.false.
 
@@ -397,7 +397,7 @@ end subroutine r_input_trac_grafic
 !#########################################################################
 !#########################################################################
 subroutine input_trac_grafic(r,g,p,npart_tot)
-   use amr_parameters, only: ndim, twotondim
+   use amr_parameters, only: ndim, twotondim, flen
    use amr_commons, only: run_t, global_t
    use pm_commons, only: part_t
    implicit none
@@ -418,7 +418,7 @@ subroutine input_trac_grafic(r,g,p,npart_tot)
    integer(kind=8),dimension(1:g%ncpu+1)::start_ind
    real(kind=4),dimension(:,:),allocatable::init_plane,init_plane_x
    real(kind=8),dimension(:),allocatable::tdx,tdy,tdz
-   character(LEN=80)::filename,filename_x
+   character(LEN=flen)::filename,filename_x
    character(LEN=5)::nchar
    logical::ok,error,keep_part,read_pos=.false.
 
@@ -635,7 +635,7 @@ end subroutine r_input_dust_grafic
 !#########################################################################
 !#########################################################################
 subroutine input_dust_grafic(r,g,p,npart_tot)
-  use amr_parameters, only: ndim, twotondim
+  use amr_parameters, only: ndim, twotondim, flen
   use amr_commons, only: run_t, global_t
   use pm_commons, only: part_t
   implicit none
@@ -656,7 +656,7 @@ subroutine input_dust_grafic(r,g,p,npart_tot)
   integer(kind=8),dimension(1:g%ncpu+1)::start_ind
   real(kind=4),dimension(:,:),allocatable::init_plane,init_plane_x
   real(kind=8),dimension(:),allocatable::tdx,tdy,tdz
-  character(LEN=80)::filename,filename_x
+  character(LEN=flen)::filename,filename_x
   character(LEN=5)::nchar
   logical::ok,error,keep_part,read_pos=.false.
 

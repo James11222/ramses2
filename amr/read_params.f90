@@ -23,7 +23,7 @@ subroutine m_read_params(pst)
   ! Local variables
   !--------------------------------------------------
   integer::i,narg,levelmax
-  character(LEN=80)::infile
+  character(LEN=flen)::infile
   character(LEN=80)::cmdarg
   integer(kind=8)::ngridtot=0
   integer(kind=8)::nparttot=0
@@ -211,7 +211,7 @@ subroutine m_read_params(pst)
   ! Initial condition files for each level
   logical::multiple=.false.
   character(LEN=20)::filetype='ascii'
-  character(LEN=80),dimension(1:MAXLEVEL)::initfile=' '
+  character(LEN=flen),dimension(1:MAXLEVEL)::initfile=' '
   real(kind=8)::ic_scale_l=1.0d0
   real(kind=8)::ic_scale_v=1.0d0
   real(kind=8)::ic_scale_m=1.0d0
@@ -810,6 +810,12 @@ subroutine m_read_params(pst)
      call mdl_abort(s%mdl)
   END IF
   CALL getarg(1,infile)
+  call get_command_argument(1,length=i)
+  if(i>len(infile))then
+     write(*,'(A,I0,A)')'Error: the namelist path is longer than ',len(infile), &
+          & ' characters; increase flen in amr_parameters.f90'
+     call mdl_abort(s%mdl)
+  endif
 
   !-------------------------------------------------
   ! Read the namelist
@@ -851,16 +857,18 @@ subroutine m_read_params(pst)
   !-------------------------------------------------
   if(tend>0)then
      if(delta_tout==0)delta_tout=tend
-     noutput=MIN(int(tend/delta_tout),MAXOUT)
+     noutput=MAX(1,MIN(nint(tend/delta_tout),MAXOUT))
      do i=1,noutput
         tout(i)=dble(i)*delta_tout
      end do
+     tout(noutput)=tend
   else if(aend>0)then
      if(delta_aout==0)delta_aout=aend
-     noutput=MIN(int(aend/delta_aout),MAXOUT)
+     noutput=MAX(1,MIN(nint(aend/delta_aout),MAXOUT))
      do i=1,noutput
         aout(i)=dble(i)*delta_aout
      end do
+     aout(noutput)=aend
   endif
   noutput=max(count(aout>0.and.aout<=1),count(tout>0))
   noutput=MIN(noutput,MAXOUT)
@@ -926,21 +934,6 @@ subroutine m_read_params(pst)
      npartmax=int(nparttot/int(s%g%ncpu,kind=8),kind=4)
   endif
   if(pic.and.npartmax>0)part=.true.
-  if(nstarmax==0)then
-     nstarmax=int(nstartot/int(s%g%ncpu,kind=8),kind=4)
-     if(nstarmax==0)star=.false.
-  endif
-  if(nsinkmax==0)then
-     nsinkmax=int(nsinktot/int(s%g%ncpu,kind=8),kind=4)
-     if(nsinkmax==0)sink=.false.
-  endif
-  if(ntreemax==0)then
-     ntreemax=int(ntreetot/int(s%g%ncpu,kind=8),kind=4)
-     if(ntreemax==0)then
-        ntreemax=int(npartmax/100)
-     endif
-     if(ntreemax==0)merger_tree=.false.
-  endif
 #ifdef HYDRO
   if(.not. hydro)then
      write(*,*)'You are not using the hydro solver but'
@@ -1027,6 +1020,10 @@ subroutine m_read_params(pst)
   rewind(1)
   read(1,NML=cooling_params,END=107)
 107 continue
+  if(eos_type<1.or.eos_type>5)then
+     write(*,*)'Error: eos_type must be 1 to 5, not ',eos_type
+     call mdl_abort(s%mdl)
+  endif
   rewind(1)
   read(1,NML=star_params,END=108)
 108 continue
@@ -1061,6 +1058,23 @@ subroutine m_read_params(pst)
   read(1,NML=dust_params,END=118)
 118 continue
   close(1)
+
+  ! Compute maximum number of star, sink and tree particles
+  if(nstarmax==0)then
+     nstarmax=int(nstartot/int(s%g%ncpu,kind=8),kind=4)
+     if(nstarmax==0)star=.false.
+  endif
+  if(nsinkmax==0)then
+     nsinkmax=int(nsinktot/int(s%g%ncpu,kind=8),kind=4)
+     if(nsinkmax==0)sink=.false.
+  endif
+  if(ntreemax==0)then
+     ntreemax=int(ntreetot/int(s%g%ncpu,kind=8),kind=4)
+     if(ntreemax==0)then
+        ntreemax=int(npartmax/100)
+     endif
+     if(ntreemax==0)merger_tree=.false.
+  endif
 
   ! Compute maximum number of tracer particles
   if(ntracmax==0)then
@@ -1116,6 +1130,18 @@ subroutine m_read_params(pst)
      jeans_refine(i)=-1.0
   end do
 
+  !-----------------------------------
+  ! Check the length of initfile
+  !-----------------------------------
+  do i=levelmin,nlevelmax
+     if(len_trim(initfile(i))>flen-flen_tail)then
+        write(*,'(A,I0,A,I0,A)')'Error: initfile(',i-levelmin+1,') is longer than ', &
+             & flen-flen_tail,' characters; increase flen in amr_parameters.f90'
+        write(*,'(A)')'  '//TRIM(initfile(i))
+        nml_ok=.false.
+     endif
+  end do
+
   !--------------------------------------------------
   ! Check for non-thermal energies
   !--------------------------------------------------
@@ -1142,6 +1168,14 @@ subroutine m_read_params(pst)
   if(entropy.and.nvar<6)then
      write(*,*)'Error: entropy=.true. need nvar >= 6'
      write(*,*)'Modify NVAR and recompile'
+     nml_ok=.false.
+  endif
+
+  !--------------------------------------------------
+  ! Check for cooling with non-equilibrium chemistry
+  !--------------------------------------------------
+  if(cooling.and.neq_chem.and..not.rt)then
+     write(*,*)'Error: neq_chem without rt needs cooling=.false.'
      nml_ok=.false.
   endif
 

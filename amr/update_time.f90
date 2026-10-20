@@ -2,6 +2,7 @@ module update_time_module
   type :: in_broadcast_aexp_t
     real(kind=8)::t,texp,aexp,hexp
     real(kind=8)::aexp_old
+    integer::nstep,nstep_coarse
   end type in_broadcast_aexp_t
 contains
 !################################################################
@@ -223,6 +224,8 @@ subroutine m_update_time(pst,ilevel,done)
   in_broadcast_aexp%aexp=g%aexp
   in_broadcast_aexp%aexp_old = g%aexp_old
   in_broadcast_aexp%hexp=g%hexp
+  in_broadcast_aexp%nstep=g%nstep
+  in_broadcast_aexp%nstep_coarse=g%nstep_coarse
   call r_broadcast_aexp(pst,in_broadcast_aexp,storage_size(in_broadcast_aexp)/32)
 
   ! Update turbulent driving field
@@ -257,6 +260,8 @@ recursive subroutine r_broadcast_aexp(pst,input,input_size)
      pst%s%g%aexp=input%aexp
      pst%s%g%aexp_old = input%aexp_old
      pst%s%g%hexp=input%hexp
+     pst%s%g%nstep=input%nstep
+     pst%s%g%nstep_coarse=input%nstep_coarse
   endif
 
 end subroutine r_broadcast_aexp

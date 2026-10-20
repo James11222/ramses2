@@ -11,7 +11,7 @@ contains
 !#########################################################################
 subroutine m_input_part_ramses(pst)
   use mdl_module
-  use amr_parameters, only: ndim
+  use amr_parameters, only: ndim, flen
   use ramses_commons, only: pst_t
   use output_amr_module, only: input_header
   use pm_parameters, only: PART_TYPE, STAR_TYPE, SINK_TYPE, TREE_TYPE
@@ -24,7 +24,7 @@ subroutine m_input_part_ramses(pst)
   integer::icpu,ilun,ncpu_file
   integer(kind=8)::npart_tot_file,npart_tot_check
   character(LEN=5)::ncharcpu
-  character(LEN=80)::file_head,file_part
+  character(LEN=flen)::file_head,file_part
   integer,allocatable,dimension(:)::npart_file
   type(out_input_star_t)::output
 
@@ -189,7 +189,7 @@ end subroutine r_input_part_ramses
 !#########################################################################
 !#########################################################################
 subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
-  use amr_parameters, only: ndim, i8b
+  use amr_parameters, only: ndim, i8b, flen
   use amr_commons, only: run_t, global_t
   use pm_parameters, only: PART_TYPE, STAR_TYPE, SINK_TYPE
   use pm_commons, only: part_t
@@ -216,7 +216,7 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
 
   character(LEN=5)::ncharcpu
   character(LEN=10)::prefix
-  character(LEN=80)::file_part
+  character(LEN=flen)::file_part
 
   !-------------------------------------
   ! Compute local particle number

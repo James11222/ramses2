@@ -456,7 +456,7 @@ end subroutine init_amr
 !###############################################
 subroutine init_params(mdl,r,g)
   use mdl_module
-  use amr_parameters, ONLY: nhilbert,ndim
+  use amr_parameters, ONLY: nhilbert,ndim,flen
   use amr_commons, ONLY: run_t, global_t
   use hash
   use hilbert
@@ -467,7 +467,7 @@ subroutine init_params(mdl,r,g)
   type(global_t)::g
 
   character(len=5)::nchar
-  character(len=80)::file_params
+  character(len=flen)::file_params
   integer::nfile_file,ncpu_file,levelmin_file,nlevelmax_file
   logical::file_exist
 

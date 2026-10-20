@@ -8,6 +8,8 @@ MODULE gadgetreadfilemod
 !
 !
 !
+  USE amr_parameters, ONLY: flen
+!
 ! Data type corresponding to gadget file header
   TYPE gadgetheadertype
      INTEGER*4, DIMENSION(6) :: npart
@@ -49,7 +51,7 @@ CONTAINS
     TYPE (gadgetheadertype), INTENT(OUT) :: header
     logical, INTENT(OUT)::ok
 ! Internal variables
-    CHARACTER(LEN=256) :: filename
+    CHARACTER(LEN=flen) :: filename
     CHARACTER(LEN=6) :: fileno
 
     filename = TRIM(basename)
@@ -109,7 +111,7 @@ CONTAINS
     INTEGER*8, DIMENSION(*) :: id
 #endif
 ! Internal variables
-    CHARACTER(LEN=256) :: filename
+    CHARACTER(LEN=flen) :: filename
     CHARACTER(LEN=6) :: fileno
     INTEGER :: np
     logical::ok
@@ -173,7 +175,7 @@ CONTAINS
     INTEGER*8, DIMENSION(*) :: id
 #endif
 ! Internal variables
-    CHARACTER(LEN=256) :: filename
+    CHARACTER(LEN=flen) :: filename
     CHARACTER(LEN=6) :: fileno
     INTEGER :: np
 

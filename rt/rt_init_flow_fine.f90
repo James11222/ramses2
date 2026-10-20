@@ -4,7 +4,7 @@
 !#########################################################################
 subroutine m_rt_init_flow_fine(pst,ilevel)
   use amr_commons, only: ndim
-  use amr_parameters, only: nvector, twotondim
+  use amr_parameters, only: nvector, twotondim, flen
   use ramses_commons, only: pst_t
   use rt_input_condinit_module, only: r_rt_input_condinit
   use rt_parameters, only: nrtgrp
@@ -16,7 +16,7 @@ subroutine m_rt_init_flow_fine(pst,ilevel)
   ! condition for RT variables into the exisiting AMR structure from an
   ! analytical model given as an external routine.
   !--------------------------------------------------------------------
-  character(len=80)::filename
+  character(len=flen)::filename
   logical::ok_file1,ok_file2,ok_file
 
   associate(s=>pst%s,r=>pst%s%r,m=>pst%s%m)
@@ -90,10 +90,12 @@ recursive subroutine r_rt_neq_updates(pst, nstep_coarse, input_size)
         call update_coolrates_tables(r, pst%s%tables, dble(g%aexp))
 
      if(r%rt .and. r%star .and. r%rt_advect .and. r%rt_star &
-        .and. r%sedprops_update.gt.0                        &
-        .and. mod(nstep_coarse,r%sedprops_update)==0)  then
+        .and. r%sedprops_update>0)then
+        ! The interval is tested first: mod(n,0) is undefined
+        if(mod(nstep_coarse,r%sedprops_update)==0)then
            ! Update cross sections based on evolving star properties
            call update_SED_group_props(r, g, s%SED, s%star)
+        endif
      endif
 
      ! Update radiation heating and cooling constants

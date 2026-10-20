@@ -4,6 +4,7 @@
 !#########################################################################
 subroutine m_init_flow_fine(pst,ilevel)
   use ramses_commons, only: pst_t
+  use amr_parameters, only: flen
   use input_hydro_condinit_module, only: r_input_hydro_condinit
   use input_hydro_grafic_module, only: r_input_hydro_grafic
   use input_hydro_gadget_module, only: r_input_hydro_gadget
@@ -15,7 +16,7 @@ subroutine m_init_flow_fine(pst,ilevel)
   ! condition into the exisiting AMR structure, either from a file
   ! of from an analytical model given as an external routine.
   !--------------------------------------------------------------------
-  character(len=80)::filename
+  character(len=flen)::filename
   logical::ok_file1,ok_file2,ok_file
 
   associate(s=>pst%s)

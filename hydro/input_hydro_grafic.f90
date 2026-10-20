@@ -30,7 +30,7 @@ end subroutine r_input_hydro_grafic
 !#########################################################################
 subroutine input_hydro_grafic(mdl,r,g,m,ilevel)
   use mdl_module
-  use amr_parameters, only: ndim,twotondim,nvector
+  use amr_parameters, only: ndim,twotondim,nvector,flen
   use hydro_parameters, only: nvar
   use amr_commons, only: run_t,global_t,mesh_t
   implicit none
@@ -58,7 +58,7 @@ subroutine input_hydro_grafic(mdl,r,g,m,ilevel)
   real(kind=4),allocatable,dimension(:,:)::init_plane
 
   logical::error,ok_file,ok_velb
-  character(LEN=80)::filename
+  character(LEN=flen)::filename
   character(LEN=5)::ncharvar
 
   if(m%noct(ilevel)==0)return
@@ -462,7 +462,7 @@ end subroutine r_input_refmap_grafic
 !#########################################################################
 subroutine input_refmap_grafic(mdl,r,g,m,ilevel)
   use mdl_module
-  use amr_parameters, only: ndim,twotondim,nvector
+  use amr_parameters, only: ndim,twotondim,nvector,flen
   use hydro_parameters, only: nvar
   use amr_commons, only: run_t,global_t,mesh_t
   implicit none
@@ -486,7 +486,7 @@ subroutine input_refmap_grafic(mdl,r,g,m,ilevel)
   real(kind=4),allocatable,dimension(:,:)::init_plane
 
   logical::error,ok_file
-  character(LEN=80)::filename
+  character(LEN=flen)::filename
 
   if(m%noct(ilevel)==0)return
 
