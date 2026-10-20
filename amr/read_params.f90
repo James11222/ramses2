@@ -934,21 +934,6 @@ subroutine m_read_params(pst)
      npartmax=int(nparttot/int(s%g%ncpu,kind=8),kind=4)
   endif
   if(pic.and.npartmax>0)part=.true.
-  if(nstarmax==0)then
-     nstarmax=int(nstartot/int(s%g%ncpu,kind=8),kind=4)
-     if(nstarmax==0)star=.false.
-  endif
-  if(nsinkmax==0)then
-     nsinkmax=int(nsinktot/int(s%g%ncpu,kind=8),kind=4)
-     if(nsinkmax==0)sink=.false.
-  endif
-  if(ntreemax==0)then
-     ntreemax=int(ntreetot/int(s%g%ncpu,kind=8),kind=4)
-     if(ntreemax==0)then
-        ntreemax=int(npartmax/100)
-     endif
-     if(ntreemax==0)merger_tree=.false.
-  endif
 #ifdef HYDRO
   if(.not. hydro)then
      write(*,*)'You are not using the hydro solver but'
@@ -1074,21 +1059,21 @@ subroutine m_read_params(pst)
 118 continue
   close(1)
 
-
-  !--------------------------------------------------
-  ! Check for totals read after their maximum is set
-  !--------------------------------------------------
-  if(nstartot/=0)then
-     write(*,*)'Error: nstartot has no effect; set nstarmax (per cpu) in &STAR_PARAMS'
-     nml_ok=.false.
+  ! Compute maximum number of star, sink and tree particles
+  if(nstarmax==0)then
+     nstarmax=int(nstartot/int(s%g%ncpu,kind=8),kind=4)
+     if(nstarmax==0)star=.false.
   endif
-  if(nsinktot/=0)then
-     write(*,*)'Error: nsinktot has no effect; set nsinkmax (per cpu) in &SINK_PARAMS'
-     nml_ok=.false.
+  if(nsinkmax==0)then
+     nsinkmax=int(nsinktot/int(s%g%ncpu,kind=8),kind=4)
+     if(nsinkmax==0)sink=.false.
   endif
-  if(ntreetot/=0)then
-     write(*,*)'Error: ntreetot has no effect; set ntreemax (per cpu) in &CLUMP_PARAMS'
-     nml_ok=.false.
+  if(ntreemax==0)then
+     ntreemax=int(ntreetot/int(s%g%ncpu,kind=8),kind=4)
+     if(ntreemax==0)then
+        ntreemax=int(npartmax/100)
+     endif
+     if(ntreemax==0)merger_tree=.false.
   endif
 
   ! Compute maximum number of tracer particles
