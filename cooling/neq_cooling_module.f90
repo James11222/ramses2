@@ -1160,10 +1160,10 @@ subroutine update_metal_cooling(tables, aexp)
   ! This is a simple model to take into account the ionization background
   ! on metal cooling (calibrated using CLOUDY).
   ZZ=1d0/aexp-1d0
-  ! Redshift bin of ZZ (z_courty is not evenly spaced)
-  iZ=1+count(z_courty(2:49)<=ZZ)
-  iZ=min(iZ,49)
-  iZ=max(iZ,1)
+  iZ=1
+  do while(ZZ>z_courty(iZ+1).and.iZ<49)
+     iZ=iZ+1
+  end do
   deltaZ=z_courty(iZ+1)-z_courty(iZ)
   ZZ=min(ZZ,z_courty(50))
   tables%phi = (phi_courty(iZ+1)*(ZZ-z_courty(iZ))/deltaZ &
