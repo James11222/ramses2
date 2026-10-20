@@ -27,14 +27,6 @@ MODULE spectrum_integrator_module
 
   PRIVATE   ! default
 
-  ! getCrosssection takes its steps at lambda*edge_lambda_factor; integrateSpectrum
-  ! sets the factor just inside the interval at its edges, and 1 elsewhere
-  real(kind=8) :: edge_lambda_factor = 1d0
-  ! Distance from an edge, in ulps, that counts as on the edge
-  real(kind=8), parameter :: edge_ulps = 64d0
-  ! Edges at the HI, HeI and HeII ionisation energies take the spectrum inside
-  logical, parameter :: edge_hold = .true.
-
 CONTAINS
 
 !*************************************************************************
@@ -64,7 +56,6 @@ FUNCTION integrateSpectrum(run, X, Y, N, e0, e1, species, ion, func)
   real(kind=8),dimension(:),allocatable:: xx, yy, f
   real(kind=8):: la0, la1
   integer :: i
-  logical :: hold0, hold1
   !-------------------------------------------------------------------------
   integrateSpectrum=0.
   if(N .le. 2) RETURN
@@ -76,11 +67,6 @@ FUNCTION integrateSpectrum(run, X, Y, N, e0, e1, species, ion, func)
      print*,'The energy limits do not overlap with SED range, so stopping'
      stop
   endif
-  ! Edges at an ionisation energy take the value of the nearest point inside
-  hold0 = edge_hold .and. e1.gt.0 .and. la0.gt.X(1)
-  if(hold0) hold0 = ionisation_edge(e1)
-  hold1 = edge_hold .and. e0.gt.0 .and. la1.lt.X(N)
-  if(hold1) hold1 = ionisation_edge(e0)
   ! If we get here, the [la0, la1] inverval is completely within X
   allocate(xx(N)) ; allocate(yy(N)) ; allocate(f(N))
   xx = la0; yy = 0.; f = 0.
@@ -90,56 +76,17 @@ FUNCTION integrateSpectrum(run, X, Y, N, e0, e1, species, ion, func)
   enddo                           !   X(i) is now the first entry .gt. la0
   ! Interpolate to value at la0
   yy(i-1) = Y(i-1) + (xx(i-1)-X(i-1))*(Y(i)-Y(i-1))/(X(i)-X(i-1))
-  ! Hold the first point inside at the high-energy edge
-  if(hold0 .and. X(i-1).lt.la0*(1d0-edge_ulps*epsilon(1d0)) .and. &
-       X(i).gt.la0*(1d0+edge_ulps*epsilon(1d0)) .and. X(i).lt.la1) yy(i-1) = Y(i)
-  ! Evaluate just inside the high-energy edge
-  edge_lambda_factor = 1d0 + edge_ulps*epsilon(1d0)
   f(i-1) = func(run, xx(i-1), yy(i-1), species, ion)
-  edge_lambda_factor = 1d0
   do while ( i.lt.N .and. X(i).le.la1 )              ! Now within interval
-     xx(i) = X(i) ; yy(i) = Y(i)
-     ! A grid point on an edge takes its steps from inside, as the edge does
-     if(X(i) .ge. la1*(1d0-edge_ulps*epsilon(1d0))) then
-        edge_lambda_factor = 1d0 - edge_ulps*epsilon(1d0)
-     else if(X(i) .le. la0*(1d0+edge_ulps*epsilon(1d0))) then
-        edge_lambda_factor = 1d0 + edge_ulps*epsilon(1d0)
-     endif
-     f(i) = func(run, xx(i), yy(i), species, ion)
-     edge_lambda_factor = 1d0
+     xx(i) = X(i) ; yy(i) = Y(i) ; f(i) = func(run, xx(i), yy(i), species, ion)
      i = i+1
   enddo                          ! i=N or X(i) is the first entry .gt. la1
   xx(i:) = la1                   !             Interpolate to value at la1
   yy(i) = Y(i-1) + (xx(i)-X(i-1))*(Y(i)-Y(i-1))/(X(i)-X(i-1))
-  ! Hold the last point inside at the low-energy edge
-  if(hold1 .and. X(i-1).lt.la1*(1d0-edge_ulps*epsilon(1d0)) .and. &
-       X(i).gt.la1*(1d0+edge_ulps*epsilon(1d0)) .and. X(i-1).gt.la0) yy(i) = Y(i-1)
-  ! Evaluate just inside the low-energy edge
-  edge_lambda_factor = 1d0 - edge_ulps*epsilon(1d0)
   f(i) = func(run, xx(i), yy(i), species, ion)
-  edge_lambda_factor = 1d0
   integrateSpectrum = trapz1(xx,f,i)
   deallocate(xx) ; deallocate(yy) ; deallocate(f)
 END FUNCTION integrateSpectrum
-
-!*************************************************************************
-FUNCTION ionisation_edge(e)
-
-  ! True if e is the ionisation energy of HI, HeI or HeII (to 1e-10 relative);
-  ! always false in DO_RTZ builds
-  !-------------------------------------------------------------------------
-  use constants, only: ionEv_HII, ionEv_HeII, ionEv_HeIII
-  real(kind=8) :: e
-  logical :: ionisation_edge
-  real(kind=8), parameter :: tol = 1d-10
-  !-------------------------------------------------------------------------
-#ifdef DO_RTZ
-  ionisation_edge = .false.
-#else
-  ionisation_edge = abs(e-ionEv_HII) .le. tol*e .or. abs(e-ionEv_HeII) .le. tol*e &
-       .or. abs(e-ionEv_HeIII) .le. tol*e
-#endif
-END FUNCTION ionisation_edge
 
 !*************************************************************************
 ! FUNCTIONS FOR USE WITH integrateSpectrum:
@@ -241,21 +188,19 @@ FUNCTION getCrosssection(run, lambda, species)
   real(kind=8) :: lambda, getCrosssection
   integer      :: species
   real(kind=8) :: E0=1., cs0=0., P=1., ya=1., yw=0., y0=0., y1=1.
-  real(kind=8) :: E, Ec, x, y
+  real(kind=8) :: E, x, y
   !------------------------------------------------------------------------
   E = hplanck * c_cgs/(lambda*1d-8) / eV2erg         ! photon energy in eV
-  ! Steps are taken at Ec, values computed at E
-  Ec = hplanck * c_cgs/(lambda*edge_lambda_factor*1d-8) / eV2erg
-  if ( Ec .lt. run%ionEvs(species) ) then           ! below ionization energy
+  if ( E .lt. run%ionEvs(species) ) then            ! below ionization energy
      getCrosssection=0.
      RETURN
   endif
   if(species .eq. run%ixHI) then ! H2 ionization cs, Abel1997 eqn A24
     getCrosssection = 0.
-    if(Ec .ge. 11.2d0  .and. Ec .lt. 13.6d0) getCrosssection=2.1d-19 ! Sternberg2014
-    if(Ec .ge. 15.42d0 .and. Ec .lt. 16.5d0) getCrosssection=6.2e-18*E-9.4e-17
-    if(Ec .ge. 16.5d0  .and. Ec .lt. 17.7d0) getCrosssection=1.4e-18*E-1.48e-17
-    if(Ec .ge. 17.7d0) getCrosssection=2.5e-14*E**(-2.71)
+    if(E .ge. 11.2  .and. E .lt. 13.6) getCrosssection=2.1d-19 ! Sternberg2014
+    if(E .ge. 15.42 .and. E .lt. 16.5) getCrosssection=6.2e-18*E-9.4e-17
+    if(E .ge. 16.5  .and. E .lt. 17.7) getCrosssection=1.4e-18*E-1.48e-17
+    if(E .ge. 17.7) getCrosssection=2.5e-14*E**(-2.71)
     RETURN
   endif
   if(species .eq. run%ixHII) then ! HI
