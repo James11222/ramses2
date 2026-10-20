@@ -59,7 +59,7 @@ recursive subroutine r_input_part_zoom(pst,dummy,input_size,output,output_size)
      output%npart_tot=output%npart_tot+next_output%npart_tot
      output%npart_max=MAX(output%npart_max,next_output%npart_max)
   else
-     call input_part_zoom(pst%s%r,pst%s%g,pst%s%p,pst%s%m)
+     call input_part_zoom(pst%s%mdl,pst%s%r,pst%s%g,pst%s%p,pst%s%m)
      output%npart_tot=int(pst%s%p%npart,kind=8)
      output%npart_max=pst%s%p%npart
   endif
@@ -69,11 +69,13 @@ end subroutine r_input_part_zoom
 !#########################################################################
 !#########################################################################
 !#########################################################################
-subroutine input_part_zoom(r,g,p,m)
+subroutine input_part_zoom(mdl,r,g,p,m)
+  use mdl_module, only: mdl_t, mdl_abort
   use amr_parameters, only: ndim, twotondim, flen
   use amr_commons, only: run_t, global_t, mesh_t
   use pm_commons, only: part_t
   implicit none
+  type(mdl_t)::mdl
   type(run_t)::r
   type(global_t)::g
   type(part_t)::p
@@ -126,7 +128,7 @@ subroutine input_part_zoom(r,g,p,m)
               if(p%npart>r%npartmax)then
                  write(*,*)'Maximum number of particles reached'
                  write(*,*)'npartmax should be greater than',p%npart
-                 stop
+                 call mdl_abort(mdl)
               endif
               if(ndim>0)p%xp(p%npart,1)=xx1
               if(ndim>1)p%xp(p%npart,2)=xx2
@@ -157,7 +159,7 @@ subroutine input_part_zoom(r,g,p,m)
         write(*,*)i2_min,i2_max
         write(*,*)i3_min,i3_max
         write(*,*)g%n1(ilevel),g%n2(ilevel),g%n3(ilevel)
-        stop
+        call mdl_abort(mdl)
      end if
 
      !------------------------------------------

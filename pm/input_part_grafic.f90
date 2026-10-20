@@ -111,7 +111,7 @@ recursive subroutine r_input_part_grafic(pst,input_array,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
      npart_tot=transfer(input_array,npart_tot)
-     call input_part_grafic(pst%s%r,pst%s%g,pst%s%p,npart_tot)
+     call input_part_grafic(pst%s%mdl,pst%s%r,pst%s%g,pst%s%p,npart_tot)
   endif
 
 end subroutine r_input_part_grafic
@@ -119,11 +119,13 @@ end subroutine r_input_part_grafic
 !#########################################################################
 !#########################################################################
 !#########################################################################
-subroutine input_part_grafic(r,g,p,npart_tot)
+subroutine input_part_grafic(mdl,r,g,p,npart_tot)
+  use mdl_module, only: mdl_t, mdl_abort
   use amr_parameters, only: ndim, twotondim, flen
   use amr_commons, only: run_t, global_t
   use pm_commons, only: part_t
   implicit none
+  type(mdl_t)::mdl
   type(run_t)::r
   type(global_t)::g
   type(part_t)::p
@@ -164,7 +166,7 @@ subroutine input_part_grafic(r,g,p,npart_tot)
   ! Check that local number of particles does not exceed maximum
   if(p%npart > r%npartmax)then
      write(*,*)'ERROR: CPU ',g%myid,' has too many particles: ',p%npart,' > ',r%npartmax
-     stop
+     call mdl_abort(mdl)
   endif
 
   !--------------------------------------
@@ -388,7 +390,7 @@ recursive subroutine r_input_trac_grafic(pst,input_array,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
      npart_tot=transfer(input_array,npart_tot)
-     call input_trac_grafic(pst%s%r,pst%s%g,pst%s%trac,npart_tot)
+     call input_trac_grafic(pst%s%mdl,pst%s%r,pst%s%g,pst%s%trac,npart_tot)
   endif
 
 end subroutine r_input_trac_grafic
@@ -396,11 +398,13 @@ end subroutine r_input_trac_grafic
 !#########################################################################
 !#########################################################################
 !#########################################################################
-subroutine input_trac_grafic(r,g,p,npart_tot)
+subroutine input_trac_grafic(mdl,r,g,p,npart_tot)
+   use mdl_module, only: mdl_t, mdl_abort
    use amr_parameters, only: ndim, twotondim, flen
    use amr_commons, only: run_t, global_t
    use pm_commons, only: part_t
    implicit none
+   type(mdl_t)::mdl
    type(run_t)::r
    type(global_t)::g
    type(part_t)::p
@@ -444,7 +448,7 @@ subroutine input_trac_grafic(r,g,p,npart_tot)
    ! Check that local number of tracer particles does not exceed maximum
    if(p%npart > r%ntracmax)then
       write(*,*)'ERROR: CPU ',g%myid,' has too many tracer particles: ',p%npart,' > ',r%ntracmax
-      stop
+      call mdl_abort(mdl)
    endif
 
    !--------------------------------------
@@ -626,7 +630,7 @@ recursive subroutine r_input_dust_grafic(pst,input_array,input_size)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
      npart_tot=transfer(input_array,npart_tot)
-     call input_dust_grafic(pst%s%r,pst%s%g,pst%s%dust,npart_tot)
+     call input_dust_grafic(pst%s%mdl,pst%s%r,pst%s%g,pst%s%dust,npart_tot)
   endif
 
 end subroutine r_input_dust_grafic
@@ -634,11 +638,13 @@ end subroutine r_input_dust_grafic
 !#########################################################################
 !#########################################################################
 !#########################################################################
-subroutine input_dust_grafic(r,g,p,npart_tot)
+subroutine input_dust_grafic(mdl,r,g,p,npart_tot)
+  use mdl_module, only: mdl_t, mdl_abort
   use amr_parameters, only: ndim, twotondim, flen
   use amr_commons, only: run_t, global_t
   use pm_commons, only: part_t
   implicit none
+  type(mdl_t)::mdl
   type(run_t)::r
   type(global_t)::g
   type(part_t)::p
@@ -682,7 +688,7 @@ subroutine input_dust_grafic(r,g,p,npart_tot)
   ! Check that local number of dust particles does not exceed maximum
   if(p%npart > r%ndustmax)then
      write(*,*)'ERROR: CPU ',g%myid,' has too many dust particles: ',p%npart,' > ',r%ndustmax
-     stop
+     call mdl_abort(mdl)
   endif
 
   !--------------------------------------
