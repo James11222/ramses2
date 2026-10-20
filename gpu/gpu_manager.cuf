@@ -296,7 +296,6 @@ subroutine gpu_allocate_amr(sim)
   implicit none
   type(ramses_t) :: sim
   integer :: nborarrsize, ilevel
-  integer(kind=8) :: nscanmax
 #ifdef MHD
   integer :: ng, nh, istat
 #endif
@@ -326,12 +325,9 @@ subroutine gpu_allocate_amr(sim)
   allocate(swap_local(1:sim%m%ngridmax+sim%m%ncachemax))
   allocate(swap_global(1:sim%m%ngridmax+sim%m%ncachemax))
   allocate(prefix_sum(1:sim%m%ngridmax+sim%m%ncachemax))
-  ! Compute maximum scan size for prefix sum arrays over all leaf cells in flag1
-  nscanmax = int(sim%m%ngridmax+sim%m%ncachemax, kind=8)                      
-  if(allocated(flag1)) nscanmax = nscanmax*twotondim                            
-  allocate(partial_sums_0(1:max(1_8,nscanmax/256_8)))                 
-  allocate(partial_sums_1(1:max(1_8,nscanmax/65536_8)))           
-  allocate(partial_sums_2(1:max(1_8,nscanmax/16777216_8)))         
+  allocate(partial_sums_0(1:max(1,(sim%m%ngridmax+sim%m%ncachemax)/256)))
+  allocate(partial_sums_1(1:max(1,(sim%m%ngridmax+sim%m%ncachemax)/65536)))
+  allocate(partial_sums_2(1:max(1,(sim%m%ngridmax+sim%m%ncachemax)/16777216)))
   swap_local=0
   swap_global=0
   prefix_sum=0
