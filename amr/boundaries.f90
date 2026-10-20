@@ -453,6 +453,12 @@ subroutine init_bound_refine(r,g,m,igrid,igrid_ref,ibound)
 
 #ifdef GRAV
 
+  ! Without the Poisson solver, boundary grids have no force
+  if(.not.r%poisson)then
+     m%f(1:twotondim,1:ndim,igrid)=0d0
+     return
+  endif
+
   do ind=1,twotondim
      do idim=1,ndim
         nstride=2**(idim-1)

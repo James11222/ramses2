@@ -64,7 +64,7 @@ SUBROUTINE neq_set_model(r, tables, h, omegab, omega0, omegaL, astart_sim, T2_si
   dasura=0.02d0
 
 !  call init_UV_background
-  call init_coolrates_tables(r, tables)
+  call init_coolrates_tables(r, tables, astart_sim)
   call updateRTGroups_CoolConstants(r, tables)
 
   if(r%nrestart==0 .and. r%cosmo)                                        &
@@ -1160,9 +1160,10 @@ subroutine update_metal_cooling(tables, aexp)
   ! This is a simple model to take into account the ionization background
   ! on metal cooling (calibrated using CLOUDY).
   ZZ=1d0/aexp-1d0
-  iZ=1+int(ZZ/z_courty(50)*49.)
-  iZ=min(iZ,49)
-  iZ=max(iZ,1)
+  iZ=1
+  do while(ZZ>z_courty(iZ+1).and.iZ<49)
+     iZ=iZ+1
+  end do
   deltaZ=z_courty(iZ+1)-z_courty(iZ)
   ZZ=min(ZZ,z_courty(50))
   tables%phi = (phi_courty(iZ+1)*(ZZ-z_courty(iZ))/deltaZ &

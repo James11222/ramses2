@@ -61,16 +61,17 @@ subroutine output_rt(s,filename)
      write(ilun,POS=nskip(ilevel))
      do igrid=m%head(ilevel),m%tail(ilevel)
         rtuold=m%rtuold(:,:,igrid)
+        ! The photon density is floored; flux components keep their sign
         do ind=1,twotondim
             do igrp = 1, nrtgrp
-              qold(ind,1+(igrp-1)*(ndim+1)) = rtuold(ind,1+(igrp-1)*(ndim+1))*g%rt_c(ilevel)
+              qold(ind,1+(igrp-1)*(ndim+1)) = max(rtuold(ind,1+(igrp-1)*(ndim+1))*g%rt_c(ilevel),tiny(0d0))
               do idim = 1, ndim
                 qold(ind,1+idim+(igrp-1)*(ndim+1)) = rtuold(ind,1+idim+(igrp-1)*(ndim+1))
               end do
             end do
         end do
-        qout=real(max(qold,tiny(0d0)),kind=4)
-        if(maxval(dble(qout)).gt.1d31 .and. s%g%myid==1 .and. .not. overflow_reported) then
+        qout=real(qold,kind=4)
+        if(maxval(abs(dble(qout))).gt.1d31 .and. s%g%myid==1 .and. .not. overflow_reported) then
             print*,'The RT variables have very high values and are overflowing in the outputs'
             overflow_reported=.true.
         endif
@@ -246,7 +247,7 @@ subroutine write_group_props(r, update, lun)
   end if
   write(lun, 901) r%group_L0(:)
   write(lun, 902) r%group_L1(:)
-#ifndef RTZ
+#ifndef DO_RTZ
   write(lun, 903) r%spec2group(:)
 #endif
   do ip = 1, nrtgrp

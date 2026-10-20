@@ -9,9 +9,9 @@ subroutine init_neq_chem(r,g,tables)
 #ifdef DO_RTZ
   use rtz_cooling_module, only: rtz_set_model
 #else
-  use neq_cooling_module, only: neq_set_model
+  use neq_cooling_module, only: neq_set_model, update_metal_cooling
 #endif
-  use coolrates_module, only: neq_cooling_t, update_rt_c
+  use coolrates_module, only: neq_cooling_t, update_rt_c, update_coolrates_tables
 #ifdef DO_RTZ
   use cosmic_ray_ionization_module, only: initialize_cr_rates
   use photoionization_UVB_module, only: load_UVB_data, update_UVB
@@ -47,6 +47,13 @@ subroutine init_neq_chem(r,g,tables)
 #endif
   endif
 
+  ! Compton table at the epoch the run starts from
+  if(r%cosmo)call update_coolrates_tables(r, tables, dble(g%aexp))
+#ifndef DO_RTZ
+  ! UV suppression of metal cooling at the same epoch (zero without cosmology)
+  tables%phi=0d0
+  if(r%cosmo)call update_metal_cooling(tables, dble(g%aexp))
+#endif
 
 #ifdef DO_RTZ
   ! If we are running with RTZ than we have numerous other initializations

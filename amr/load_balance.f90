@@ -868,6 +868,7 @@ subroutine balance_part(s,p,ilevel)
   use rho_fine_module, only: sort_hilbert
   use hilbert
   use mpi
+  use mdl_module, only: mdl_abort
   implicit none
   type(ramses_t)::s
   type(part_t)::p
@@ -1269,6 +1270,15 @@ subroutine balance_part(s,p,ilevel)
   !-------------------------------------------------------------------
   p%npart=p%headp(ilevel)-1+count_loc+recv_cnt_tot
   p%tailp(r%nlevelmax)=p%npart
+
+  ! Stop if this cpu would hold more particles than its arrays can store
+  if(p%npart>size(p%mp))then
+     write(*,'(A,I0,A,I0,A,I0,A,I0)') &
+          & 'Error: cpu ',g%myid,' particle type ',p%type, &
+          & ' would hold ',p%npart,' particles in arrays sized ',size(p%mp)
+     write(*,*)'Increase npartmax, nstarmax or nsinkmax (a maximum per cpu)'
+     call mdl_abort(mdl)
+  endif
 
   !-------------------------------------------------------------------
   ! Swap particles positions, velocities and masses between processors

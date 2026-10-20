@@ -175,7 +175,7 @@ FUNCTION trapz1(X, Y, N, cum)
 END FUNCTION trapz1
 
 !*************************************************************************
-#ifndef RTZ
+#ifndef DO_RTZ
 FUNCTION getCrosssection(run, lambda, species)
 
   ! Gives an atom-photon cross-section of given species at given wavelength,

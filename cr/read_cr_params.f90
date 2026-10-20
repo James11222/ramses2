@@ -19,7 +19,7 @@ subroutine m_read_cr_params(pst)
   !--------------------------------------------------
   ! Local variables
   !--------------------------------------------------
-  character(LEN=80)::infile
+  character(LEN=flen)::infile
   logical::nml_ok
 
   !--------------------------------------------------

@@ -88,6 +88,7 @@ end subroutine r_input_part_gadget
 !#########################################################################
 !#########################################################################
 subroutine input_part_gadget(s,mstar,mgas,mhalo,npart_star,npart_gas,npart_halo)
+  use mdl_module, only: mdl_abort
   use amr_parameters, only: ndim,flen
   use ramses_commons, only: ramses_t
   use gadgetreadfilemod, only: gadgetheadertype
@@ -116,16 +117,22 @@ subroutine input_part_gadget(s,mstar,mgas,mhalo,npart_star,npart_gas,npart_halo)
   associate(r=>s%r,g=>s%g,m=>s%m,p=>s%p,gas=>s%gas,mdl=>s%mdl,star=>s%star)
 
   ! Reading header of the Gadget file
+  ! Check the length of the joined initfile/ic_file path
+  if(len_trim(r%initfile(r%levelmin))+1+len_trim(r%ic_file)>flen)then
+     write(*,'(A,I0,A)')'initfile/ic_file path is longer than ',flen, &
+          & ' characters; increase flen in amr_parameters.f90'
+     call mdl_abort(mdl)
+  endif
   filename = TRIM(r%initfile(r%levelmin))//'/'//TRIM(r%ic_file)
   INQUIRE(FILE=filename,EXIST=file_exist)
   if(.not.file_exist) then
-     if(g%myid==1)write(*,*) TRIM(filename)," not found"
-     stop
+     write(*,*) TRIM(filename)," not found"
+     call mdl_abort(mdl)
   endif
 
   if((r%ic_format.ne.'Gadget1').and.(r%ic_format.ne.'Gadget2')) then
-     if(g%myid==1)write(*,*) 'Specify a valid IC file format [ic_format=Gadget1/Gadget2]'
-     stop
+     write(*,*) 'Specify a valid IC file format [ic_format=Gadget1/Gadget2]'
+     call mdl_abort(mdl)
   endif
 
   if(g%myid==1)write(*,'(A50)')"__________________________________________________"
@@ -259,13 +266,13 @@ subroutine input_part_gadget(s,mstar,mgas,mhalo,npart_star,npart_gas,npart_halo)
   endif
 
   if((head_blck.eq.-1).or.(pos_blck.eq.-1).or.(vel_blck.eq.-1)) then
-     if(g%myid==1)write(*,*) 'Gadget file does not contain handful data'
-     stop
+     write(*,*) 'Gadget file does not contain handful data'
+     call mdl_abort(mdl)
   endif
 
   if(head_size.ne.256) then
-     if(g%myid==1)write(*,*) 'Gadget header is not 256 bytes'
-     stop
+     write(*,*) 'Gadget header is not 256 bytes'
+     call mdl_abort(mdl)
   endif
 
   ! Read Gadget file header
@@ -307,10 +314,10 @@ subroutine input_part_gadget(s,mstar,mgas,mhalo,npart_star,npart_gas,npart_halo)
   end do
 
   if((pos_size.ne.npart).or.(vel_size.ne.npart)) then
-     if(g%myid==1)write(*,*) 'POS =',pos_size
-     if(g%myid==1)write(*,*) 'VEL =',vel_size
-     if(g%myid==1)write(*,*) 'Number of particles does not correspond to block sizes'
-     stop
+     write(*,*) 'POS =',pos_size
+     write(*,*) 'VEL =',vel_size
+     write(*,*) 'Number of particles does not correspond to block sizes'
+     call mdl_abort(mdl)
   endif
 
   ! Read gas particles

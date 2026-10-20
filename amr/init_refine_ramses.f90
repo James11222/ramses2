@@ -5,7 +5,7 @@ contains
 !#########################################################################
 !#########################################################################
 subroutine m_init_refine_ramses(pst)
-  use amr_parameters, only: nhilbert
+  use amr_parameters, only: nhilbert, flen
   use ramses_commons, only: pst_t
   use hilbert
   use params_module, only: m_broadcast_params, m_broadcast_global
@@ -21,7 +21,7 @@ subroutine m_init_refine_ramses(pst)
   ! This routine is the master procedure to set the base grid
   ! and initialize all cell-based variables within it.
   !--------------------------------------------------------------------
-  character(LEN=80)::file_params,file_amr
+  character(LEN=flen)::file_params,file_amr
   character(LEN=5)::nchar,ncharcpu
   integer(kind=8),dimension(1:nhilbert)::zero_key
   integer(kind=8),dimension(1:nhilbert,0:pst%s%g%ncpu)::bound_key
@@ -228,7 +228,7 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
   ! the initial AMR grid.
   !--------------------------------------------------------------
   use mdl_module, only: mdl_abort
-  use amr_parameters, only: nhilbert, ndim, twotondim, nvector
+  use amr_parameters, only: nhilbert, ndim, twotondim, nvector, flen
   use input_hydro_condinit_module, only: input_hydro_vecpot, cons_from_prim
   use hydro_parameters, only: nvar, nprim, nener, ie
   use ramses_commons, only: ramses_t
@@ -246,7 +246,7 @@ subroutine init_refine_ramses(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,no
   integer(kind=8)::iskip_amr=0_8,iskip_hydro=0_8,iskip_grav=0_8
   integer::i,n,ind,istart,iend,noct_tmp,ilev,ioct,idim,i1,j1,k1
   integer::igrid,igrid_start,nleft,nright,ileft,iright
-  character(LEN=80)::file_params,file_amr,file_hydro,file_grav
+  character(LEN=flen)::file_params,file_amr,file_hydro,file_grav
   character(LEN=5)::nchar,ncharcpu
   logical::clean
 
