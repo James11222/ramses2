@@ -86,7 +86,6 @@ recursive subroutine r_set_grid_device(pst)
         sink_sortp  = pst%s%sink%sortp
         sink_idp    = pst%s%sink%idp
         sink_idm    = pst%s%sink%idm
-        if (allocated(sink_pid) .and. allocated(pst%s%sink%pid)) sink_pid = pst%s%sink%pid
         call GPU_Error_Check(__FILE__, __LINE__)
         call nvtxEndRange()
      endif
@@ -104,7 +103,6 @@ recursive subroutine r_set_grid_device(pst)
         tree_idp    = pst%s%tree%idp
         tree_idm    = pst%s%tree%idm
         tree_idt    = pst%s%tree%idt
-        if (allocated(tree_pid) .and. allocated(pst%s%tree%pid)) tree_pid = pst%s%tree%pid
         call GPU_Error_Check(__FILE__, __LINE__)
         call nvtxEndRange()
      endif
@@ -229,7 +227,6 @@ subroutine gpu_to_host_part(pst)
      pst%s%sink%sortp  = sink_sortp
      pst%s%sink%idp    = sink_idp
      pst%s%sink%idm    = sink_idm
-     if (allocated(sink_pid) .and. allocated(pst%s%sink%pid)) pst%s%sink%pid = sink_pid
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
   endif
@@ -246,7 +243,6 @@ subroutine gpu_to_host_part(pst)
      pst%s%tree%idp    = tree_idp
      pst%s%tree%idm    = tree_idm
      pst%s%tree%idt    = tree_idt
-     if (allocated(tree_pid) .and. allocated(pst%s%tree%pid)) pst%s%tree%pid = tree_pid
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
   endif
