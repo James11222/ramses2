@@ -17,6 +17,9 @@ module ramses_commons
      type(part_t)::p
      type(part_t)::star
      type(part_t)::sink
+#ifdef CORE
+     type(part_t)::core
+#endif
      type(part_t)::tree
      type(part_t)::trac
      type(part_t)::dust
@@ -415,6 +418,13 @@ subroutine open_part_file(s,p,filename,nskip,ilun)
         ivar=ivar+1
         nskip(ivar+1)=nskip(ivar)+4*npart
      endif
+#ifdef CORE
+     ! Specific internal energy
+     if(allocated(p%up))then
+        ivar=ivar+1
+        nskip(ivar+1)=nskip(ivar)+4*npart
+     endif
+#endif
      ! Levels
      ivar=ivar+1
      nskip(ivar+1)=nskip(ivar)+4*npart
@@ -554,6 +564,13 @@ subroutine close_part_file(s,p,filename,nskip,ilun)
         ivar=ivar+1
         nskip(ivar)=nskip(ivar)+4*p%npart
      endif
+#ifdef CORE
+     ! Specific internal energy
+     if(allocated(p%up))then
+        ivar=ivar+1
+        nskip(ivar)=nskip(ivar)+4*p%npart
+     endif
+#endif
      ! Levels
      ivar=ivar+1
      nskip(ivar)=nskip(ivar)+4*p%npart

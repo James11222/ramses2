@@ -10,6 +10,11 @@ module amr_commons
   use hash
   use domain_m
 
+#ifdef CORE
+  ! Core ids a cell keeps for the core merger's candidate search
+  integer,parameter::ncore_marker_slot=4
+#endif
+
   type multipole_t
     real(kind=8),dimension(1:ndim+1)::q
   end type multipole_t
@@ -26,6 +31,7 @@ module amr_commons
      logical::part    =.false.   ! Dark matter particles activated
      logical::star    =.false.   ! Stars and star formation activated
      logical::sink    =.false.   ! Sinks and sink formation activated
+     logical::core    =.false.   ! Cores and core formation activated
      logical::tree    =.false.   ! Merger tree particles activated
      logical::trac    =.false.   ! Tracer particles activated
      logical::dust    =.false.   ! Dust particles activated
@@ -73,6 +79,7 @@ module amr_commons
      integer::npartmax=0         ! Maximum number of DM particles
      integer::nstarmax=0         ! Maximum number of star particles
      integer::nsinkmax=0         ! Maximum number of sink particles
+     integer::ncoremax=0         ! Maximum number of core particles
      integer::ntreemax=0         ! Maximum number of tree particles
      integer::ntracmax=0         ! Maximum number of tracer particles
      integer::ndustmax=0         ! Maximum number of dust particles
@@ -372,6 +379,7 @@ module amr_commons
      real(kind=8)::eps_star=0.01
      integer(kind=8),dimension(1:6)::seed
      real(kind=8)::m_star=1
+     real(kind=8)::core_to_star_mass=100d0 ! in Msun
 
      ! Supernovae feedback parameters
      real(kind=8)::M_SNII=10.
@@ -414,6 +422,7 @@ module amr_commons
 
      ! Sink parameters
      integer::rho_type_sink=1
+     integer::rho_type_core=4
      logical::sink_descent=.false.
      logical::sink_recenter_on_peak=.true.
      real(kind=8)::fudge_descent=0.5d0
@@ -423,11 +432,41 @@ module amr_commons
      real(kind=8)::sink_mass_threshold=0
      real(kind=8)::sink_purity_threshold=-1
      real(kind=8)::sink_fraction_threshold=2d0
+     real(kind=8)::core_relevance_threshold=2
+     real(kind=8)::core_density_threshold=-1       ! H/cc, proper
+     real(kind=8)::core_clump_density_threshold=-1 ! H/cc, proper; <0: a tenth of core_density_threshold
+     ! Clump density threshold given at a reference redshift and scaled with the mesh
+     real(kind=8)::core_clump_density_threshold_nH=-1   ! H/cc at zref
+     real(kind=8)::core_clump_density_threshold_zref=3  ! reference redshift
+     ! Clump density threshold as a fraction of the Larson-Penston density
+     real(kind=8)::core_clump_density_threshold_LP_frac=-1  ! fraction of LP
+     real(kind=8)::core_clump_density_threshold_LP_T=100    ! K, isothermal
+     real(kind=8)::core_clump_density_threshold_LP_mu=1.22  ! mean molecular weight
+     logical::core_use_LP_criteria=.false.
+     real(kind=8)::core_saddle_threshold=-1
+     real(kind=8)::core_mass_threshold=0
+     real(kind=8)::core_fraction_threshold=2d0
+     real(kind=8)::core_mass4_threshold=0d0
+     logical::core_use_clump_prop_criteria=.false.
+     logical::core_use_mass4_criteria=.false.
+     logical::core_use_energy_criteria=.false. ! Require the clump to be gravitationally bound
+     logical::core_use_contracting_criteria=.false.
+     logical::core_use_contracting_all_axes=.false. ! Require contraction along all principal axes
+     logical::core_include_radiation_support=.true.
+     logical::core_include_magnetic_support=.true.
      real(kind=8)::sink_radius=-1
      real(kind=8)::sink_delta_tout=0
      real(kind=8)::sink_nstar_frac=-1
      real(kind=8)::sink_mseed
+     real(kind=8)::core_seed_mass=0d0 ! in Msun; 0: no seed mass
      logical::sink_form=.false.
+     logical::core_form=.false.
+     logical::core_to_star=.false.
+     logical::core_refine=.false.
+     logical::output_core_clump=.false. ! Write core_clump.* catalogue
+     logical::core_merge=.false. ! Merge cores with overlapping accretion zones
+     integer::core_merger_search_order=4 ! Core merger search half-width in dx_min
+     real(kind=8)::core_merging_timescale=1000d0 ! Core merger age gate in yr
      logical::sink_merge=.false.
      logical::sink_refine=.false.
      logical::sink_dump=.false.
@@ -451,6 +490,19 @@ module amr_commons
      logical::momentum_conserving = .false.
      real(kind=8)::eddington_floor = -1 ! Accretion rate floor below which nothing happens
      real(kind=8)::manual_accretion_rate = -1 ! Manual accretion rate (fraction of Eddington)
+
+     ! Core accretion parameters
+     integer::core_accretion_type=2 ! 0: none, 2: flux accretion
+     real(kind=8)::core_accretion_boost=1.0d0 ! Boost for core accretion
+     integer::core_b_spline_order=2 ! Core accretion sampling: 2=CIC, 3=TSC, 4=PCS
+     logical::core_use_rho_inf=.true. ! Extrapolate density at infinity from Bondi solution
+     logical::core_use_bondi_lambda=.true. ! Use Bondi sonic-point lambda factor
+     logical::core_use_bondi_for_subsonic_accretion=.false. ! Use Bondi instead of flux rate for subsonic accretion
+     logical::core_use_fa_fact_B14=.false. ! Apply Bleuler+14 flux-accretion density-threshold correction
+     logical::core_momentum_conserving=.true. ! Update core momentum with accreted gas
+     logical::core_fix_mass=.false. ! Keep core mass fixed during accretion
+     logical::core_retire_if_no_acc=.false. ! Retire a core that has stopped accreting
+     integer::core_zero_acc_intervals=2 ! Consecutive valid zero-accretion coarse intervals
 
      ! AGN Feedback parameters
      logical::agn = .false. ! Whether to activate AGN feedback around black hole/sink particles
