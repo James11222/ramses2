@@ -241,6 +241,11 @@ subroutine clump_finder(s)
   if(s%r%sink)then
      call particle_peak_id(s,s%sink)
   endif
+#ifdef CORE
+  if(s%r%core)then
+     call particle_peak_id(s,s%core)
+  endif
+#endif
   if(s%r%tree)then
      call particle_peak_id(s,s%tree)
   endif
@@ -300,6 +305,11 @@ subroutine clump_finder(s)
      if(s%r%sink)then
         call particle_halo_id(s,s%sink)
      endif
+#ifdef CORE
+     if(s%r%core)then
+        call particle_halo_id(s,s%core)
+     endif
+#endif
      if(s%r%tree)then
         call particle_halo_id(s,s%tree)
      endif
@@ -308,6 +318,9 @@ subroutine clump_finder(s)
      if(s%r%part)s%p%hid=s%p%pid
      if(s%r%star)s%star%hid=s%star%pid
      if(s%r%sink)s%sink%hid=s%sink%pid
+#ifdef CORE
+     if(s%r%core)s%core%hid=s%core%pid
+#endif
      if(s%r%tree)s%tree%hid=s%tree%pid
   endif
 #endif
