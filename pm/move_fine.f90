@@ -98,6 +98,17 @@ recursive subroutine r_kick_drift_part(pst,input_array,input_size,output_array,o
            call pcs_kick_drift_part(pst%s,pst%s%sink,ilevel,action_part)
         endif
      endif
+#ifdef CORE
+     if(pst%s%r%core)then
+        if(pst%s%r%sink_force_interpolation_scheme==1)then
+           call cic_kick_drift_part(pst%s,pst%s%core,ilevel,action_part)
+        elseif(pst%s%r%sink_force_interpolation_scheme==2)then
+           call tsc_kick_drift_part(pst%s,pst%s%core,ilevel,action_part)
+        elseif(pst%s%r%sink_force_interpolation_scheme==3)then
+           call pcs_kick_drift_part(pst%s,pst%s%core,ilevel,action_part)
+        endif
+     endif
+#endif
      if(pst%s%r%tree)then
         if(pst%s%r%tree_force_interpolation_scheme==1)then
            call cic_kick_drift_part(pst%s,pst%s%tree,ilevel,action_part)
@@ -388,6 +399,9 @@ subroutine cic_kick_drift_part(s,p,ilevel,action_part)
 
         ! Store force for sink particles
         if(p%type==SINK_TYPE)p%fp(ipart,1:ndim)=ff(1:ndim)
+#ifdef CORE
+        if(p%type==CORE_TYPE)p%fp(ipart,1:ndim)=ff(1:ndim)
+#endif
 
      else if(action_part.EQ.action_kick_only)then
 
@@ -565,6 +579,9 @@ subroutine tsc_kick_drift_part(s,p,ilevel,action_part)
 
         ! Store force for sink particles
         if(p%type==SINK_TYPE)p%fp(ipart,1:ndim)=ff(1:ndim)
+#ifdef CORE
+        if(p%type==CORE_TYPE)p%fp(ipart,1:ndim)=ff(1:ndim)
+#endif
 
      else if(action_part.EQ.action_kick_only)then
 
@@ -747,6 +764,9 @@ subroutine pcs_kick_drift_part(s,p,ilevel,action_part)
 
         ! Store force for sink particles
         if(p%type==SINK_TYPE)p%fp(ipart,1:ndim)=ff(1:ndim)
+#ifdef CORE
+        if(p%type==CORE_TYPE)p%fp(ipart,1:ndim)=ff(1:ndim)
+#endif
 
      else if(action_part.EQ.action_kick_only)then
 

@@ -11,5 +11,6 @@ module pm_parameters
   integer,parameter :: TREE_TYPE = 3
   integer,parameter :: TRAC_TYPE = 4
   integer,parameter :: DUST_TYPE = 5
+  integer,parameter :: CORE_TYPE = 6
 
 end module pm_parameters
