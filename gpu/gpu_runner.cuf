@@ -158,7 +158,7 @@ contains
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
     num_threads = 256
-    num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+    num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
     call nvtxStartRange("GPU cmpdt", color=0)!green
     call cmpdt_kernel<<<num_blocks, num_threads>>>(grid, uold, bold, f, &
         & constant_gravity, head_idx, num_octs, d_data, dx, gamma, &
@@ -229,7 +229,7 @@ contains
     if (num_octs == 0) return
 
     num_threads = 256
-    num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+    num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
 
     ! Alias prefix_sum as a real(kind=dp) scratch buffer
     if (.not. allocated(prefix_sum)) then
@@ -786,11 +786,11 @@ contains
     if(nsubgrid == 2)threads_per_block = 256
 
     num_threads = 256
-    num_blocks = (num_octs*twotondim + num_threads - 1) / num_threads
+    num_blocks = (num_octs + num_threads/twotondim - 1) / (num_threads/twotondim)
     call nimhd_coeff_kernel<<<num_blocks, num_threads>>>(uold, bold, eta_nimhd, head_oct, num_octs, &
          & real(sim%r%gamma,dp), real(sim%r%smallr,dp), real(sim%r%etamag,dp), real(sim%r%eta_ad,dp))
     if (num_cache > 0) then
-       num_blocks = (num_cache*twotondim + num_threads - 1) / num_threads
+       num_blocks = (num_cache + num_threads/twotondim - 1) / (num_threads/twotondim)
        call nimhd_coeff_kernel<<<num_blocks, num_threads>>>(uold, bold, eta_nimhd, head_cache, num_cache, &
             & real(sim%r%gamma,dp), real(sim%r%smallr,dp), real(sim%r%etamag,dp), real(sim%r%eta_ad,dp))
     endif
@@ -1102,7 +1102,7 @@ contains
     subroutine scratch(lev, mode)
       integer, intent(in) :: lev, mode
       if (sim%m%noct(lev) <= 0) return
-      call nimhd_scratch_kernel<<<(sim%m%noct(lev)*twotondim + num_threads - 1)/num_threads, num_threads>>>(uold, &
+      call nimhd_scratch_kernel<<<(sim%m%noct(lev) + num_threads/twotondim - 1)/(num_threads/twotondim), num_threads>>>(uold, &
            & unew, b_cf, sim%m%head(lev), sim%m%noct(lev), mode)
     end subroutine scratch
 
@@ -1334,6 +1334,11 @@ contains
    ! Get total number of new SF sites (therefore new star particles)
    call gpu_scan(prefix_sum, head_idx, num_octs, npart_new_d)
    npart_new = npart_new_d
+   if (npart_new < 0) then
+      write(*,*)'gpu_star_formation: number of new star particles exceeds 2^31'
+      write(*,*)'Increase n_star in the namelist'
+      stop
+   endif
 
    if(npart_new > 0 .or. nstar_new > 0)then
       write(*,*)'New star=',mstar_loc, npart_new
@@ -2049,7 +2054,7 @@ contains
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
     num_threads = 256
-    num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+    num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
     if (num_octs > 0) then
        call nvtxStartRange("GPU init_flag", color=2)!yellow
        call count_flag1_kernel<<<num_blocks, num_threads>>>(flag1, head_idx, num_octs, nflag_d)
@@ -2057,7 +2062,7 @@ contains
     endif
 
     nflag_h = nflag_d
-    nflag = int(nflag_h, kind=4)
+    nflag = int(min(nflag_h, int(huge(1_4), kind=8)), kind=4)
 
   end subroutine gpu_init_flag
 
@@ -2201,7 +2206,7 @@ contains
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
     num_threads = 256
-    num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+    num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
 
     if (num_octs > 0) then
        call nvtxStartRange("GPU user_flag", color=2)!yellow
@@ -2210,7 +2215,7 @@ contains
     endif
 
     nflag_h = nflag_d
-    nflag = int(nflag_h, kind=4)
+    nflag = int(min(nflag_h, int(huge(1_4), kind=8)), kind=4)
 
   end subroutine gpu_user_flag
 
@@ -2255,7 +2260,7 @@ contains
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
     num_threads = 256
-    num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+    num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
     if (num_octs > 0) then
        call nvtxStartRange("GPU smooth_flag", color=2)!yellow
        call count_flag1_kernel<<<num_blocks, num_threads>>>(flag1, head_idx, num_octs, nflag_d)
@@ -2263,7 +2268,7 @@ contains
     endif
 
     nflag_h = nflag_d
-    nflag = int(nflag_h, kind=4)
+    nflag = int(min(nflag_h, int(huge(1_4), kind=8)), kind=4)
 
   end subroutine gpu_smooth_flag
 
@@ -2643,7 +2648,7 @@ contains
        head_idx = sim%m%head(ilevel)
        num_octs = sim%m%noct(ilevel)
        num_threads = 256
-       num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+       num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
        if (num_octs > 0) then
           call nvtxStartRange("GPU cic_multipole", color=1)!blue
           call multipole_tot<<<num_blocks, num_threads>>>(unew, head_idx, num_octs, multipole_d)
@@ -2694,7 +2699,7 @@ contains
     if (ilevel == sim%r%levelmin) then
        multipole_d = 0d0
        num_threads = 256
-       num_blocks  = (num_octs * twotondim + num_threads - 1) / num_threads
+       num_blocks  = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
        if (num_octs > 0) then
           call nvtxStartRange("GPU cic_multipole2 tot", color=1)!blue
           call multipole_tot<<<num_blocks, num_threads>>>(unew, head_idx, num_octs, multipole_d)
@@ -3120,7 +3125,7 @@ contains
     head_idx = sim%m_mg%head(ifine-1)
     num_octs = sim%m_mg%noct(ifine-1)
     num_threads = 256
-    num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+    num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
     if (num_octs > 0) then
        call nvtxStartRange("GPU restrict_mask", color=1)!blue
        mask_max = -1d0
@@ -3397,7 +3402,7 @@ contains
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
     num_threads = 256
-    num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+    num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
 
     ! Compute residual norm
     if (num_octs > 0) then
@@ -3437,7 +3442,7 @@ contains
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
     num_threads = 256
-    num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+    num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
 
     ! Compute RHS norm
     if (num_octs > 0) then
@@ -3569,7 +3574,7 @@ contains
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
     num_threads = 256
-    num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+    num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
 
     ! Compute residual norm
     if (num_octs > 0) then
@@ -3612,7 +3617,7 @@ contains
     head_idx = sim%m%head(ilevel)
     num_octs = sim%m%noct(ilevel)
     num_threads = 256
-    num_blocks = (num_octs * twotondim + num_threads - 1 ) / num_threads
+    num_blocks = (num_octs + num_threads / twotondim - 1 ) / (num_threads / twotondim)
 
     ! Compute residual norm
     if (num_octs > 0) then

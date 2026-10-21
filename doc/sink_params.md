@@ -16,7 +16,7 @@ The three namelist blocks `&SINK_PARAMS`, `&SINK_ACCRETION_PARAMS` and `&SINK_FE
 | `sink_descent`             | `logical`    | `.false.`     | Activate the density-gradient descent to relocate sinks onto local peaks.                          |
 | `fudge_descent`            | `real`       | 0.5           | Step size used by the density-gradient descent.                                                    |
 | `sink_relevance_threshold` | `real`       | 2             | Peak relevance threshold used for sink formation sites.                                            |
-| `sink_density_threshold`   | `real`       | -1            | Density threshold (code units) above which peaks are considered for sink formation.                |
+| `sink_density_threshold`   | `real`       | -1            | Density threshold (code units) above which peaks are considered for sink formation. Must be > 0 when `sink_form` is set. |
 | `sink_saddle_threshold`    | `real`       | -1            | Saddle-point density threshold for merging peaks into halo-patches for sinks.                      |
 | `sink_mass_threshold`      | `real`       | 0             | Minimum clump mass (code units) required to form a sink.                                           |
 | `sink_purity_threshold`    | `real`       | -1            | Minimum high-resolution mass fraction (for zoom simulations).                                      |

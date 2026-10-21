@@ -197,7 +197,7 @@ contains
     bid = blockIdx%x - 1
 
     ! Compute oct idx
-    oct_idx = ( tid + bid * blockDim%x ) / twotondim
+    oct_idx = bid * ( blockDim%x / twotondim ) + tid / twotondim
 
     ! If not in block
     if (oct_idx >= num_octs) then

@@ -4,7 +4,7 @@ This sets of parameters, contained in the namelist block `&AMR_PARAMS`, controls
 |:---------------------------- |:------------- |:------------------------- |
 | `levelmin=1`                 |  `integer`    | Minimum level of refinement. This parameter sets the size of the coarse (or base) grid to `nx=2**levelmin`.|
 | `levelmax=1`                 |  `integer`    | Maximum level of refinement. If `levelmax=levelmin`, the simulation will be executed on a standad Cartesian grid of linear size `nx=2**levelmin`|
-| `ngridmax=0`                 |  `integer`    | Maximum number of grids (or octs) that can be allocated during the run within each MPI process. |
+| `ngridmax=0`                 |  `integer`    | Maximum number of grids (or octs) that can be allocated during the run within each MPI process. `ngridmax+ncachemax` must not exceed 2^29 = 536,870,912 per MPI rank. |
 | `npartmax=0`                 |  `integer`    | Maximum number of dark matter particles that can be allocated during the run within each MPI process. |
 | `ncachemax=10000`            |  `integer`    | Maximum number of cache lines per MPI rank allocated for the software cache. On the GPU it also holds the ghost octs made at refinement boundaries. |
 | `nexpand=1`                  |  `integer`    | Number of times the mesh expansion is applied to the refinement map (see mesh smoothing).|

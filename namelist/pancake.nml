@@ -28,7 +28,7 @@ filetype='ascii'
 initfile(1)='.'
 H0=72.
 omega_m=0.3
-omega_l=1.0
+omega_l=0.7
 boxlen_ini=25.
 aexp_ini=0.01
 /

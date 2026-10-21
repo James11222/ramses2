@@ -106,6 +106,7 @@ subroutine star_formation(r,g,m,s,ilevel,mstar_loc)
   integer(kind=8),dimension(0:g%ncpu)::nsite_cum,nstar_cum
   integer,dimension(1:g%ncpu)::nsite_cpu,nstar_cpu
   integer::i,ind,igrid,idim,icpu,ngrid,nleaf,nsite,nstar,nstar_loc
+  integer(kind=8)::nsite8
   real(kind=8)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v,erfc
   real(kind=8)::dx,vol,factG,n_star,nCOM,d,d0,mstar,dstar,t_ff,mcell,mgas,mask,PoissMean,Rand
   real(kind=8)::sfr_ff,t_dyn,p,cs2,sigma2,alpha_vir,sigs,scrit,Mach2,b_turb
@@ -148,7 +149,7 @@ subroutine star_formation(r,g,m,s,ilevel,mstar_loc)
   ! Count potential star formation sites.
   ! This is important for the pseudo-random number generator
   !---------------------------------------------------------
-  nsite=0
+  nsite8=0
   ! Loop over octs with vector sweeps
   do igrid=m%head(ilevel),m%tail(ilevel)
      ! Loop over cells
@@ -165,10 +166,16 @@ subroutine star_formation(r,g,m,s,ilevel,mstar_loc)
         endif
         ! Count number of random numbers
         if(ok)then
-           nsite=nsite+1
+           nsite8=nsite8+1
         endif
      end do
   end do
+  if(nsite8 > m%ngridmax)then
+     write(*,*)'star_formation: cells above star formation threshold (',nsite8,') exceed ngridmax (',m%ngridmax,')'
+     write(*,*)'Increase n_star in the namelist'
+     stop
+  endif
+  nsite = int(nsite8, kind=4)
 
   !---------------------------------------------------------
   ! Compute number of star formation sites across all CPUs.

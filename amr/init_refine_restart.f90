@@ -29,7 +29,8 @@ subroutine m_init_refine_restart(pst)
   integer::levelmin_file,nlevelmax_file
   integer::levelmin_max,nlevelmax_min,noct_tmp
   integer::nfile_file,ncpu_file,input_size,output_size
-  integer,dimension(:),allocatable::noct_file,noct_skip
+  integer,dimension(:),allocatable::noct_file
+  integer(kind=8),dimension(:),allocatable::noct_skip
   integer,dimension(:),allocatable::input_array,output_array
 
   associate(r=>pst%s%r,g=>pst%s%g,m=>pst%s%m,p=>pst%s%p,mdl=>pst%s%mdl)
@@ -103,14 +104,14 @@ subroutine m_init_refine_restart(pst)
      end do
 
      ! Allocate input array
-     input_size=2*ncpu_file+4
+     input_size=3*ncpu_file+4
      allocate(input_array(1:input_size))
      input_array(1)=ilevel
      input_array(2)=ncpu_file
      input_array(3)=levelmin_file
      input_array(4)=nlevelmax_file
      input_array(5:ncpu_file+4)=noct_file
-     input_array(ncpu_file+5:2*ncpu_file+4)=noct_skip
+     input_array(ncpu_file+5:3*ncpu_file+4)=transfer(noct_skip,input_array)
 
      ! Allocate output array
      output_size=2*nhilbert*(g%ncpu+1)
@@ -181,7 +182,8 @@ recursive subroutine r_init_refine_restart(pst,input_array,input_size,output_arr
 
   integer::ilevel,ncpu_file
   integer::levelmin_file,nlevelmax_file
-  integer,dimension(:),allocatable::noct_file,nskip_file
+  integer,dimension(:),allocatable::noct_file
+  integer(kind=8),dimension(:),allocatable::nskip_file
   integer(kind=8),dimension(1)::dummy
   integer(kind=8),dimension(:,:),allocatable::bound_key
   integer(kind=8),dimension(:,:),allocatable::next_bound_key
@@ -209,7 +211,7 @@ recursive subroutine r_init_refine_restart(pst,input_array,input_size,output_arr
      allocate(noct_file(1:ncpu_file))
      noct_file=input_array(5:ncpu_file+4)
      allocate(nskip_file(1:ncpu_file))
-     nskip_file=input_array(ncpu_file+5:2*ncpu_file+4)
+     nskip_file=transfer(input_array(ncpu_file+5:3*ncpu_file+4),dummy)
      allocate(bound_key(1:nhilbert,0:pst%s%g%ncpu))
      bound_key=0
      call init_refine_restart(pst%s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,noct_file,nskip_file,bound_key)
@@ -240,7 +242,8 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
   type(ramses_t)::s
   integer::ilevel,ncpu_file
   integer::levelmin_file,nlevelmax_file
-  integer,dimension(1:ncpu_file)::noct_file,nskip_file
+  integer,dimension(1:ncpu_file)::noct_file
+  integer(kind=8),dimension(1:ncpu_file)::nskip_file
   integer(kind=8),dimension(1:nhilbert,0:s%g%ncpu)::bound_key_target
 
   ! Local variables
@@ -248,13 +251,14 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
   integer::nbyte=storage_size(1.0_dp)/8
   integer(kind=8)::iskip_amr=0,iskip_hydro=0,iskip_grav=0,iskip_rt,iskip_cr
   integer::i,ind,istart,iend,noct_tmp,ilev,ioct,i1,j1,k1
-  integer::igrid,igrid_start,nleft,nright,ileft,iright
+  integer::igrid,igrid_start,ileft,iright
+  integer(kind=8)::nleft,nright
   character(LEN=flen)::file_params,file_amr,file_hydro,file_grav,file_rt,file_cr
   character(LEN=5)::nchar,ncharcpu
   logical::clean
 
-  integer,dimension(1:ncpu_file)::noct_cum
-  integer,dimension(1:s%g%ncpu)::ntarget_cum
+  integer(kind=8),dimension(1:ncpu_file)::noct_cum
+  integer(kind=8),dimension(1:s%g%ncpu)::ntarget_cum
 
   integer(kind=8),dimension(1:nhilbert)::hk
   integer(kind=8),dimension(1:ndim)::ix
@@ -306,7 +310,7 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
   ! New cumulative numbers of octs per cpu
   !------------------------------------------
   do icpu=1,g%ncpu
-     ntarget_cum(icpu)=int(dble(icpu)*dble(noct_cum(ncpu_file))/dble(g%ncpu))
+     ntarget_cum(icpu)=int(dble(icpu)*dble(noct_cum(ncpu_file))/dble(g%ncpu),kind=8)
   end do
 
   if(g%myid>1)then
@@ -347,11 +351,11 @@ subroutine init_refine_restart(s,ilevel,ncpu_file,levelmin_file,nlevelmax_file,n
   ! Loop over relevant files (if any)
   do icpu=ileft,iright
      if(icpu>1)then
-        istart=MAX(nleft-noct_cum(icpu-1),0)+1
-        iend=MIN(nright-noct_cum(icpu-1),noct_file(icpu))
+        istart=int(MAX(nleft-noct_cum(icpu-1),0_8)+1,kind=4)
+        iend=int(MIN(nright-noct_cum(icpu-1),int(noct_file(icpu),kind=8)),kind=4)
      else
-        istart=nleft+1
-        iend=MIN(nright,noct_file(icpu))
+        istart=int(nleft+1,kind=4)
+        iend=int(MIN(nright,int(noct_file(icpu),kind=8)),kind=4)
      endif
      call title(icpu,ncharcpu)
 

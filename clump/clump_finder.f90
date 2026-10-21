@@ -324,6 +324,7 @@ subroutine collect_test(s)
   use nbors_utils
   use cache_commons
   use cache
+  use mdl_module, only: mdl_abort
 #ifndef WITHOUTMPI
   use mpi
 #endif
@@ -344,6 +345,7 @@ subroutine collect_test(s)
   integer::ilevel,i,levelmin_part
   integer,dimension(1:s%g%ncpu)::ntest_cpu
   integer(kind=8),dimension(0:s%g%ncpu)::ntest_cum
+  integer(kind=8)::ntest8
   logical::verbose_all=.false.
   integer::action,icellp,igridp
   logical::ok
@@ -387,7 +389,7 @@ subroutine collect_test(s)
   !---------------------------------------------------------
   ! Count cells above threshold. We name them test particles
   !---------------------------------------------------------
-  c%ntest = 0
+  ntest8 = 0
   do ilevel=r%levelmin,r%nlevelmax ! Loop over levels
      do igrid=m%head(ilevel),m%tail(ilevel) ! Loop over grids
         do ind=1,twotondim ! Loop over cells
@@ -395,11 +397,17 @@ subroutine collect_test(s)
            d = m%rho(ind,igrid)
            ok = ok .and. d > c%density_threshold
            if(ok)then
-              c%ntest=c%ntest+1
+              ntest8=ntest8+1
            endif
         end do
      end do
   end do
+  if(ntest8 > m%ngridmax)then
+     write(*,*)'collect_test: cells above density threshold (',ntest8,') exceed ngridmax (',m%ngridmax,')'
+     write(*,*)'Increase density_threshold (clump finder, merger tree) or sink_density_threshold (sink formation)'
+     call mdl_abort(mdl)
+  endif
+  c%ntest = int(ntest8, kind=4)
 
   !-------------------------------------------------
   ! Compute number of test particles across all CPUs
@@ -417,7 +425,7 @@ subroutine collect_test(s)
   end do
   c%ntest_tot=ntest_cum(g%ncpu)
   if(g%myid==1)then
-     write(*,'(" Found",I12,"  cells above threshold")')int(c%ntest_tot,kind=4)
+     write(*,'(" Found",I12,"  cells above threshold")')c%ntest_tot
   endif
 
   if (c%ntest>0) then

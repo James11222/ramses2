@@ -928,9 +928,17 @@ subroutine m_read_params(pst)
         write(*,*)'Allocate some space for refinements !!!'
         nml_ok=.false.
      else
-        ngridmax=int(ngridtot/int(s%g%ncpu,kind=8),kind=4)
+        ngridmax=int(min(ngridtot/int(s%g%ncpu,kind=8),int(huge(1_4),kind=8)),kind=4)
      endif
   end if
+  ! The oct hash table (amr/hash.f90) uses 32-bit sizes: its size, the smallest
+  ! power of two >= 2*(ngridmax+ncachemax), must stay below 2^31
+  if(int(ngridmax,kind=8)+int(MAX(ncachemax,10000),kind=8) > 2_8**29)then
+     write(*,*)'Error in the namelist:'
+     write(*,*)'ngridmax+ncachemax must not exceed 2^29 = 536870912 per MPI rank'
+     write(*,*)'Currently ngridmax=',ngridmax,' ncachemax=',ncachemax
+     nml_ok=.false.
+  endif
   !--------------------------------------------------
   ! Compute maximum number of particles:
   ! dm, stars, sinks, trees, tracers, and dust
@@ -1341,6 +1349,18 @@ subroutine m_read_params(pst)
         write(*, *) 'Error: cone opening angles must be < 90 degrees'
         nml_ok = .false.
      endif
+  endif
+
+  ! A positive density threshold is required by the clump finder, merger tree and sink formation
+  if((clump_finder.or.merger_tree).and.density_threshold<=0)then
+     write(*,*)'Error: clump_finder=.true. or merger_tree=.true. needs density_threshold > 0'
+     write(*,*)'Currently density_threshold=',density_threshold
+     nml_ok=.false.
+  endif
+  if(sink_form.and.sink_density_threshold<=0)then
+     write(*,*)'Error: sink_form=.true. needs sink_density_threshold > 0'
+     write(*,*)'Currently sink_density_threshold=',sink_density_threshold
+     nml_ok=.false.
   endif
 
   ! Check that sink formation uses a valid density field

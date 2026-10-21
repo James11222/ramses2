@@ -14,7 +14,7 @@ The namelist block `&CLUMP_PARAMS` is used to specify parameters controlling the
 | `rho_type_clump`   | `integer`    | 1                   | Set the fluid used to compute the density field (0: all, 1: DM, 2: stars, 4: gas).         |
 | `nsteps_per_tree`  | `integer`    | 1                   | Call the clump finder for merger-tree particle formation every `nsteps_per_tree` coarse steps. |
 | `relevance_threshold` | `real`    | 2                   | Set the relevance (prominence) threshold to remove noisy peaks.                              |
-| `density_threshold`| `real`       | -1                  | Set the density threshold in code units above which peaks are detected.                      |
+| `density_threshold`| `real`       | -1                  | Set the density threshold in code units above which peaks are detected. Must be > 0 when `clump_finder` or `merger_tree` is set. |
 | `saddle_threshold` | `real`       | -1                  | Set the saddle point density in code units above which peaks are merged into haloes.         |
 | `mass_threshold`   | `real`       | 0                   | Set the mass threshold in code units below which small clumps are discarded.                 |
 | `purity_threshold` | `real`       | -1                  | Set the required fraction of mass in high-res particles (for zooms). Usually set to 0.98.    |

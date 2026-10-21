@@ -210,9 +210,10 @@ subroutine compute_new_bound_key(r,g,m,ilevel,noct,bound_key_target)
   ! perfect load balancing is enforced.
   !----------------------------------------------------
   integer::idom,ioct
-  integer::nleft,nright,ileft,iright,istart,nstart
-  integer,dimension(1:g%ncpu)::noct_cum
-  integer,dimension(1:g%ncpu)::ntarget_cum
+  integer::ileft,iright,istart
+  integer(kind=8)::nleft,nright,nstart
+  integer(kind=8),dimension(1:g%ncpu)::noct_cum
+  integer(kind=8),dimension(1:g%ncpu)::ntarget_cum
   integer(kind=8),dimension(1:nhilbert)::one_key
   real(kind=8)::xtarget
 
@@ -234,7 +235,7 @@ subroutine compute_new_bound_key(r,g,m,ilevel,noct,bound_key_target)
   iright=-1
   bound_key_target=0
   do idom=1,g%ncpu
-     ntarget_cum(idom)=int(dble(idom)*xtarget)
+     ntarget_cum(idom)=int(dble(idom)*xtarget,kind=8)
      if(g%myid>1)then
         nleft=noct_cum(g%myid-1)
      else
@@ -909,8 +910,9 @@ subroutine balance_part(s,p,ilevel)
   type(domain_t),allocatable,dimension(:)::domain_part
   integer(kind=8),allocatable,dimension(:,:)::bound_key_target,bound_key_new
   integer(kind=8),allocatable,dimension(:,:)::bound_key_left,bound_key_right
-  integer::npart_lev,npart_lev_tot,iter
-  integer,dimension(0:s%g%ncpu)::npart_cum,npart_cum_tot
+  integer::iter
+  integer(kind=8)::npart_lev,npart_lev_tot
+  integer(kind=8),dimension(0:s%g%ncpu)::npart_cum,npart_cum_tot
   integer,dimension(1:s%g%ncpu)::npart_cpu,npart_cpu_tot
   real(kind=8)::xpart_target,xcum_target
 
@@ -951,7 +953,7 @@ subroutine balance_part(s,p,ilevel)
         ! Compute number of particles
         npart_lev=p%tailp(ilev)-p%headp(ilev)+1
         npart_lev_tot=0
-        call MPI_ALLREDUCE(npart_lev,npart_lev_tot,1,MPI_INTEGER,MPI_SUM,MPI_COMM_WORLD,info)
+        call MPI_ALLREDUCE(npart_lev,npart_lev_tot,1,MPI_INTEGER8,MPI_SUM,MPI_COMM_WORLD,info)
         if(npart_lev_tot.EQ.0)cycle
         xpart_target=dble(npart_lev_tot)/dble(ncpu)
 
@@ -966,8 +968,8 @@ subroutine balance_part(s,p,ilevel)
         end do
 
         if(g%myid==1.and.r%verbose)write(*,*)"====================================="
-        if(g%myid==1.and.r%verbose)write(*,'("Level=",I4," npart=",I10)')ilev,npart_lev_tot
-        if(g%myid==1.and.r%verbose)write(*,'(17(I10,1X))')npart_cum
+        if(g%myid==1.and.r%verbose)write(*,'("Level=",I4," npart=",I12)')ilev,npart_lev_tot
+        if(g%myid==1.and.r%verbose)write(*,'(17(I12,1X))')npart_cum
 
         !---------------------------------------------------------
         ! Sort particle according to current level Hilbert key
@@ -1014,7 +1016,7 @@ subroutine balance_part(s,p,ilevel)
            end do
 
            ! Compute global histogram
-           call MPI_ALLREDUCE(npart_cum,npart_cum_tot,ncpu+1,MPI_INTEGER,MPI_SUM,MPI_COMM_WORLD,info)
+           call MPI_ALLREDUCE(npart_cum,npart_cum_tot,ncpu+1,MPI_INTEGER8,MPI_SUM,MPI_COMM_WORLD,info)
            npart_cum=npart_cum_tot
 
            unbalance=0
@@ -1044,8 +1046,8 @@ subroutine balance_part(s,p,ilevel)
            bound_key_target=bound_key_new
 
         end do
-        if(g%myid==1.and.r%verbose)write(*,'("iter=",I4,1X,17(I10,1X))')iter,npart_cum
-        if(g%myid==1.and.r%verbose)write(*,'("iter=",I4,1X,17(I10,1X))')iter,(int(dble(icpu)*xpart_target),icpu=0,ncpu)
+        if(g%myid==1.and.r%verbose)write(*,'("iter=",I4,1X,17(I12,1X))')iter,npart_cum
+        if(g%myid==1.and.r%verbose)write(*,'("iter=",I4,1X,17(I12,1X))')iter,(int(dble(icpu)*xpart_target,kind=8),icpu=0,ncpu)
 
         !---------------------------------------------------------
         ! Store new Hilbert tick marks after convergence

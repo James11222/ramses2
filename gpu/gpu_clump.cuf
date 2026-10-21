@@ -556,8 +556,9 @@ contains
     ! 2. Compute inclusive prefix scan over octs
     call gpu_scan(prefix_sum, 1, num_octs, total_test_d)
     ntest = total_test_d
-    if (ntest > size(grid_d)) then
-       write(*,*) 'gpu_collect_test: ntest (', ntest, ') exceeds preallocated size (', size(grid_d), ')'
+    if (ntest < 0 .or. ntest > size(grid_d)) then
+       write(*,*) 'gpu_collect_test: cells above density threshold exceed ngridmax (', size(grid_d), ')'
+       write(*,*) 'Increase density_threshold (clump finder) or sink_density_threshold (sink formation)'
        stop
     endif
     if (ntest == 0) return
