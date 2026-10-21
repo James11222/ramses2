@@ -11,7 +11,7 @@ module clump_device
        prefix_sum, box_size, xp, vp, mp, star_xp, star_vp, star_mp, &
        sink_jp, sink_tm, sink_idm, pid, hid, star_pid, star_hid, sink_hid
   use gpu_runner, only: tree_xp, tree_vp, tree_mp, tree_tp, tree_tm, tree_levelp, &
-       tree_idp, tree_idm, tree_idt, tree_pid
+       tree_idp, tree_idm, tree_idt, tree_pid, tree_hid
   use part_device, only: dtnew_part_d
   implicit none
 
@@ -236,6 +236,7 @@ contains
     if (allocated(sim%p%pid))    deallocate(sim%p%pid, sim%p%hid)
     if (allocated(sim%star%pid)) deallocate(sim%star%pid, sim%star%hid)
     if (allocated(sim%sink%pid)) deallocate(sim%sink%pid, sim%sink%hid)
+    if (allocated(sim%tree%pid)) deallocate(sim%tree%pid, sim%tree%hid)
   end subroutine gpu_reset_clump
 
   ! =========================================================================
@@ -348,6 +349,17 @@ contains
              sim%sink%hid = sink_hid(1:sim%sink%npart)
           else
              sim%sink%hid = sim%sink%pid
+          endif
+       endif
+    endif
+    if (sim%r%tree) then
+       allocate(sim%tree%pid(1:sim%tree%npart), sim%tree%hid(1:sim%tree%npart))
+       if (sim%tree%npart > 0) then
+          sim%tree%pid = tree_pid(1:sim%tree%npart)
+          if (c%saddle_threshold > 0) then
+             sim%tree%hid = tree_hid(1:sim%tree%npart)
+          else
+             sim%tree%hid = sim%tree%pid
           endif
        endif
     endif
@@ -2455,6 +2467,10 @@ contains
        grid_size_part = (sim%sink%npart + block_size - 1) / block_size
        call trim_particles_kernel<<<grid_size_part, block_size>>>(sink_pid, ind_final_d, sim%sink%npart)
     endif
+    if (sim%r%tree .and. sim%tree%npart > 0) then
+       grid_size_part = (sim%tree%npart + block_size - 1) / block_size
+       call trim_particles_kernel<<<grid_size_part, block_size>>>(tree_pid, ind_final_d, sim%tree%npart)
+    endif
 
     ! 4. Modify flag2 (and flag1 if halos) accordingly
     if (sim%c%ntest > 0) then
@@ -2527,6 +2543,9 @@ contains
     if (sim%r%sink) then
        call gpu_particle_peak_id(sim, 3)
     endif
+    if (sim%r%tree) then
+       call gpu_particle_peak_id(sim, 4)
+    endif
 
     ! 9. Merge peak-patches into halo-patches (halo ids in flag1)
     if (sim%c%saddle_threshold > 0) then
@@ -2549,6 +2568,7 @@ contains
        if (sim%r%part) call gpu_particle_halo_id(sim, 1)
        if (sim%r%star) call gpu_particle_halo_id(sim, 2)
        if (sim%r%sink) call gpu_particle_halo_id(sim, 3)
+       if (sim%r%tree) call gpu_particle_halo_id(sim, 4)
     endif
   end subroutine gpu_clump_finder
 
@@ -2810,11 +2830,12 @@ contains
     use ramses_commons, only: ramses_t
     implicit none
     type(ramses_t) :: sim
-    integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars, 3 = sinks
+    integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars, 3 = sinks, 4 = trees
 
     if (ptype == 1) call launch_particle_id(sim, sim%p,    xp,      hid,      flag1, int(sim%r%npartmax, kind=8))
     if (ptype == 2) call launch_particle_id(sim, sim%star, star_xp, star_hid, flag1, int(sim%r%nstarmax, kind=8))
     if (ptype == 3) call launch_particle_id(sim, sim%sink, sink_xp, sink_hid, flag1, int(sim%r%nsinkmax, kind=8))
+    if (ptype == 4) call launch_particle_id(sim, sim%tree, tree_xp, tree_hid, flag1, int(sim%r%ntreemax, kind=8))
   end subroutine gpu_particle_halo_id
 
   ! =========================================================================
