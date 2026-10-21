@@ -66,12 +66,16 @@ def wr_header(fileloc,npart,nfile,star):
         f.write(f"{npart}\n")
         f.write("Total number of files\n")
         f.write(f"{nfile}\n")
-        # Particle fields
+        # Particle fields: name, numpy data type, number of components
         f.write("Particle fields\n")
+        f.write("pos f4 3\n")
+        f.write("vel f4 3\n")
+        f.write("mass f4 1\n")
         if star:
-            f.write("pos vel mass metallicity birth_date level birth_id")
-        else:
-            f.write("pos vel mass level birth_id")
+            f.write("metallicity f4 1\n")
+            f.write("birth_date f4 1\n")
+        f.write("level i4 1\n")
+        f.write("birth_id i8 1\n")
 
 #================================
 # write new ramses parameter file

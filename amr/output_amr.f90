@@ -688,7 +688,7 @@ end subroutine output_info
 !#########################################################################
 !#########################################################################
 subroutine output_header(r,g,p,filename)
-  use amr_parameters, only: flen
+  use amr_parameters, only: ndim,dp,i8b,flen
   use amr_commons, only: run_t,global_t
   use pm_commons, only: part_t
   implicit none
@@ -700,6 +700,8 @@ subroutine output_header(r,g,p,filename)
   ! Local variables
   integer::ilun
   character(LEN=flen)::fileloc
+  character(LEN=2)::rtype,itype
+  character(LEN=*),parameter::fmt='(1x,a,1x,a,1x,i0)'
 
   if(r%verbose)write(*,*)'Entering output_header'
 
@@ -720,42 +722,52 @@ subroutine output_header(r,g,p,filename)
      write(ilun,*)r%nfile
   endif
 
-  ! Keep track of what particle fields are present
+  ! Keep track of what particle fields are present, in file order,
+  ! with their numpy data type and number of components
+  if(index(filename,'output')==0)then
+     write(rtype,'("f",i0)')storage_size(1.0_dp)/8
+  else
+     rtype='f4'
+  endif
+  write(itype,'("i",i0)')i8b
   write(ilun,*)'Particle fields'
-  write(ilun,'(a)',advance='no')'pos vel mass '
+  write(ilun,fmt)'pos',rtype,ndim
+  write(ilun,fmt)'vel',rtype,ndim
+  write(ilun,fmt)'mass',rtype,1
   if(allocated(p%phip).and.index(filename,'output')/=0)then
-     write(ilun,'(a)',advance='no')'potential '
+     write(ilun,fmt)'potential',rtype,1
   endif
   if(allocated(p%zp))then
-     write(ilun,'(a)',advance='no')'metallicity '
+     write(ilun,fmt)'metallicity',rtype,1
   endif
   if(allocated(p%fp))then
-     write(ilun,'(a)',advance='no')'accel '
+     write(ilun,fmt)'accel',rtype,ndim
   endif
   if(allocated(p%jp))then
-     write(ilun,'(a)',advance='no')'angmom '
+     write(ilun,fmt)'angmom',rtype,ndim
   end if
   if(allocated(p%tp))then
-     write(ilun,'(a)',advance='no')'birth_date '
+     write(ilun,fmt)'birth_date',rtype,1
   endif
   if(allocated(p%tm))then
-     write(ilun,'(a)',advance='no')'merging_date '
+     write(ilun,fmt)'merging_date',rtype,1
   endif
   if(allocated(p%up))then
-     write(ilun,'(a)',advance='no')'internal_energy '
+     write(ilun,fmt)'internal_energy',rtype,1
   endif
-  write(ilun,'(a)',advance='no')'level birth_id '
+  write(ilun,fmt)'level','i4',1
+  write(ilun,fmt)'birth_id',itype,1
   if(allocated(p%idm))then
-     write(ilun,'(a)',advance='no')'merging_id '
+     write(ilun,fmt)'merging_id',itype,1
   endif
   if(allocated(p%idt))then
-     write(ilun,'(a)',advance='no')'tracking_id '
+     write(ilun,fmt)'tracking_id',itype,1
   endif
   if(allocated(p%size))then
-     write(ilun,'(a)',advance='no')'size '
+     write(ilun,fmt)'size',rtype,1
   endif
   if(allocated(p%charge))then
-     write(ilun,'(a)',advance='no')'charge '
+     write(ilun,fmt)'charge',rtype,1
   endif
   close(ilun)
 

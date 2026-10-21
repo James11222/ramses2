@@ -232,32 +232,37 @@ def rd_histo(filename):
 
     return h
 
+# Particle fields stored as [ndim,npart] arrays, even when ndim=1
+part_vector_fields = ("pos","vel","accel","angmom")
+
 class Part:
-    def __init__(self,nnp,nndim,star=False,sink=False,tree=False,peak=False):
+    def __init__(self,nnp,nndim,fields,peak=False):
         self.npart = nnp
         self.ndim = nndim
-        self.pos = np.zeros([nndim,nnp])
-        self.vel = np.zeros([nndim,nnp])
-        self.mass = np.zeros([nnp])
-        self.level = np.zeros([nnp])
-        self.birth_id = np.zeros([nnp])
-        if(star):
-            self.metallicity = np.zeros([nnp])
-            self.birth_date = np.zeros([nnp])
-        if(tree):
-            self.birth_date = np.zeros([nnp])
-            self.merging_date = np.zeros([nnp])
-            self.merging_id = np.zeros([nnp])
-            self.tracking_id = np.zeros([nnp])
-        if(sink):
-            self.angmom = np.zeros([nndim,nnp])
-            self.accel = np.zeros([nndim,nnp])
-            self.birth_date = np.zeros([nnp])
-            self.merging_date = np.zeros([nnp])
-            self.merging_id = np.zeros([nnp])
+        self.fields = [name for name, dtype, ncomp in fields]
+        for name, dtype, ncomp in fields:
+            if(dtype.kind=="f"):
+                dtype = np.dtype(np.float64)
+            if(name in part_vector_fields):
+                setattr(self,name,np.zeros([ncomp,nnp],dtype=dtype))
+            else:
+                setattr(self,name,np.zeros([nnp],dtype=dtype))
         if(peak):
             self.halo_id = np.zeros([nnp],dtype=np.int32)
             self.peak_id = np.zeros([nnp],dtype=np.int32)
+
+def rd_part_fields(filename):
+    """Return the particle fields listed in a <prefix>_header.txt file,
+    in file order, as a list of (name, numpy dtype, number of components)."""
+    with open(filename) as f:
+        lines = [line.strip() for line in f]
+    fields = []
+    for line in lines[lines.index("Particle fields")+1:]:
+        if line=="":
+            continue
+        name, dtype, ncomp = line.split()
+        fields.append((name,np.dtype(dtype),int(ncomp)))
+    return fields
 
 def rd_part(nout,**kwargs):
     """This function reads a RAMSES particle file (unformatted Fortran binary)
@@ -272,7 +277,7 @@ def rd_part(nout,**kwargs):
         path:   a string containing the relative path of the output folder.
         prefix: a string describing the particle type. It corresponds to the filenames uswd in
                 the output folder. prefix='part' by default. It takes the followinf  possible values:
-                prefix='part', 'star', 'tree', 'sink'
+                prefix='part', 'star', 'sink', 'core', 'tree', 'trac', 'dust'
         center: a numpy array containing the coordinates of the center of the sphere restricting
                 the region to read in data.
         radius: the radius of the sphere restricting the region to read in data.
@@ -282,10 +287,12 @@ def rd_part(nout,**kwargs):
         A variable p (class Part) object defined as:
             p.npart: number of particles
             p.ndim: number of space dimensions
+            p.fields: list of the particle fields read from the file
             p.pos: coordinates of the particles. p.pos[0] gives the x coordinate as a numpy array.
             p.vel: velocities of the particles. p.vel[0] gives the x-component as a numpy array.
             p.mass: array containing the particle masses
-        The number of fields depends on the particle type defined by prefix.
+        The other fields (p.level, p.birth_id, p.metallicity, ...) are those listed in
+        the <prefix>_header.txt file of the output directory.
 
     Example:
         import ramses as ram
@@ -319,23 +326,18 @@ def rd_part(nout,**kwargs):
     #    cpulist = range(1,ncpu+1)
     cpulist = range(1,ncpu+1)
 
-    star = False
-    sink = False
-    tree = False
-    if(prefix=="star"):
-        star=True
-    if(prefix=="sink"):
-        sink=True
-    if(prefix=="tree"):
-        tree=True
+    if(backup):
+        outdir = path+"/backup_"+car1
+    else:
+        outdir = path+"/output_"+car1
+
+    fields = rd_part_fields(outdir+"/"+prefix+"_header.txt")
+
     prefix2="/"+prefix+"."
     npart = 0
     for icpu in cpulist:
         car2 = str(icpu).zfill(5)
-        if(backup):
-            filename = path+"/backup_"+car1+prefix2+car2
-        else:
-            filename = path+"/output_"+car1+prefix2+car2
+        filename = outdir+prefix2+car2
 
         npart2 = np.fromfile(filename,dtype=np.int32,count=1,offset=4)[0]
         npart = npart + npart2
@@ -344,175 +346,33 @@ def rd_part(nout,**kwargs):
         txt = "Found "+str(npart)+" particles"
         print(txt)
 
-    p = Part(npart,ndim,star,sink,tree,peak)
+    p = Part(npart,ndim,fields,peak)
     p.npart = npart
     p.ndim = ndim
 
     ipart = 0
     for icpu in cpulist:
         car2 = str(icpu).zfill(5)
-        if(backup):
-            filename = path+"/backup_"+car1+prefix2+car2
-        else:
-            filename = path+"/output_"+car1+prefix2+car2
+        filename = outdir+prefix2+car2
 
         npart2 = np.fromfile(filename,dtype=np.int32,count=1,offset=4)[0]
 
         offset = np.int64(8) # prevent overflow
 
-        # read particle positions
-        for idim in range(0,ndim):
-            if(backup):
-                xp = np.fromfile(filename,dtype=np.float64,count=npart2,offset=offset)
-                offset = offset + npart2*8
-            else:
-                xp = np.fromfile(filename,dtype=np.float32,count=npart2,offset=offset)
-                offset = offset + npart2*4
-
-            p.pos[idim,ipart:ipart+npart2] = xp
-
-        # read particle velocities
-        for idim in range(0,ndim):
-            if(backup):
-                xp = np.fromfile(filename,dtype=np.float64,count=npart2,offset=offset)
-                offset = offset + npart2*8
-            else:
-                xp = np.fromfile(filename,dtype=np.float32,count=npart2,offset=offset)
-                offset = offset + npart2*4
-
-            p.vel[idim,ipart:ipart+npart2] = xp
-
-        # read particle masses
-        if(backup):
-            xp = np.fromfile(filename,dtype=np.float64,count=npart2,offset=offset)
-            offset = offset + npart2*8
-        else:
-            xp = np.fromfile(filename,dtype=np.float32,count=npart2,offset=offset)
-            offset = offset + npart2*4
-
-        p.mass[ipart:ipart+npart2] = xp
-
-        if(star):
-            # read particle metallicities
-            if(backup):
-                xp = np.fromfile(filename,dtype=np.float64,count=npart2,offset=offset)
-                offset = offset + npart2*8
-            else:
-                xp = np.fromfile(filename,dtype=np.float32,count=npart2,offset=offset)
-                offset = offset + npart2*4
-
-            p.metallicity[ipart:ipart+npart2] = xp
-
-            # read particle birth times
-            if(backup):
-                xp = np.fromfile(filename,dtype=np.float64,count=npart2,offset=offset)
-                offset = offset + npart2*8
-            else:
-                xp = np.fromfile(filename,dtype=np.float32,count=npart2,offset=offset)
-                offset = offset + npart2*4
-
-            p.birth_date[ipart:ipart+npart2] = xp
-
-        if(sink):
-            # read particle accelerations
-            for idim in range(0,ndim):
-                if(backup):
-                    xp = np.fromfile(filename,dtype=np.float64,count=npart2,offset=offset)
-                    offset = offset + npart2*8
+        for name, dtype, ncomp in fields:
+            data = getattr(p,name)
+            for icomp in range(0,ncomp):
+                xp = np.fromfile(filename,dtype=dtype,count=npart2,offset=offset)
+                offset = offset + npart2*dtype.itemsize
+                if(name in part_vector_fields):
+                    data[icomp,ipart:ipart+npart2] = xp
                 else:
-                    xp = np.fromfile(filename,dtype=np.float32,count=npart2,offset=offset)
-                    offset = offset + npart2*4
-
-                p.accel[idim,ipart:ipart+npart2] = xp
-
-            # read particle angular momentum
-            for idim in range(0,ndim):
-                if(backup):
-                    xp = np.fromfile(filename,dtype=np.float64,count=npart2,offset=offset)
-                    offset = offset + npart2*8
-                else:
-                    xp = np.fromfile(filename,dtype=np.float32,count=npart2,offset=offset)
-                    offset = offset + npart2*4
-
-                p.angmom[idim,ipart:ipart+npart2] = xp
-
-            # read particle birth times
-            if(backup):
-                xp = np.fromfile(filename,dtype=np.float64,count=npart2,offset=offset)
-                offset = offset + npart2*8
-            else:
-                xp = np.fromfile(filename,dtype=np.float32,count=npart2,offset=offset)
-                offset = offset + npart2*4
-
-            p.birth_date[ipart:ipart+npart2] = xp
-
-            # read particle merging times
-            if(backup):
-                xp = np.fromfile(filename,dtype=np.float64,count=npart2,offset=offset)
-                offset = offset + npart2*8
-            else:
-                xp = np.fromfile(filename,dtype=np.float32,count=npart2,offset=offset)
-                offset = offset + npart2*4
-
-            p.merging_date[ipart:ipart+npart2] = xp
-
-        if(tree):
-            # read particle birth times
-            if(backup):
-                xp = np.fromfile(filename,dtype=np.float64,count=npart2,offset=offset)
-                offset = offset + npart2*8
-            else:
-                xp = np.fromfile(filename,dtype=np.float32,count=npart2,offset=offset)
-                offset = offset + npart2*4
-
-            p.birth_date[ipart:ipart+npart2] = xp
-
-            # read particle merging times
-            if(backup):
-                xp = np.fromfile(filename,dtype=np.float64,count=npart2,offset=offset)
-                offset = offset + npart2*8
-            else:
-                xp = np.fromfile(filename,dtype=np.float32,count=npart2,offset=offset)
-                offset = offset + npart2*4
-
-            p.merging_date[ipart:ipart+npart2] = xp
-
-        # read particle level
-        xp = np.fromfile(filename,dtype=np.int32,count=npart2,offset=offset)
-        offset = offset + npart2*4
-
-        p.level[ipart:ipart+npart2] = xp
-
-        # read particle id
-        xp = np.fromfile(filename,dtype=np.int32,count=npart2,offset=offset)
-        offset = offset + npart2*4
-
-        p.birth_id[ipart:ipart+npart2] = xp
-
-        # read particle merging id
-        if(tree or sink):
-            xp = np.fromfile(filename,dtype=np.int32,count=npart2,offset=offset)
-            offset = offset + npart2*4
-
-            p.merging_id[ipart:ipart+npart2] = xp
-
-        # read particle tracking id
-        if(tree):
-            xp = np.fromfile(filename,dtype=np.int32,count=npart2,offset=offset)
-            offset = offset + npart2*4
-
-            p.tracking_id[ipart:ipart+npart2] = xp
+                    data[ipart:ipart+npart2] = xp
 
         ipart = ipart + npart2
 
     if(peak):
-        prefix2="/peak_part."
-        if(star):
-            prefix2="/peak_star."
-        if(sink):
-            prefix2="/peak_sink."
-        if(tree):
-            prefix2="/peak_tree."
+        prefix2="/peak_"+prefix+"."
         ipart = 0
         for icpu in cpulist:
             car2 = str(icpu).zfill(5)
@@ -548,25 +408,11 @@ def rd_part(nout,**kwargs):
         if ndim==3:
             r = np.sqrt((p.pos[0]-center[0])**2+(p.pos[1]-center[1])**2+(p.pos[2]-center[2])**2)
         p.npart = np.count_nonzero(r < radius)
-        p.mass = p.mass[r < radius]
-        p.pos = p.pos[:,r < radius]
-        p.vel = p.vel[:,r < radius]
-        p.level = p.level[r < radius]
-        p.birth_id = p.birth_id[r < radius]
-        if(star):
-            p.metallicity = p.metallicity[r < radius]
-            p.birth_date = p.birth_date[r < radius]
-        if(sink):
-            p.accel = p.accel[:,r < radius]
-            p.birth_date = p.birth_date[r < radius]
-            p.merging_date = p.merging_date[r < radius]
-            p.merging_id = p.merging_id[r < radius]
-            p.angmom = p.angmom[:,r < radius]
-        if(tree):
-            p.birth_date = p.birth_date[r < radius]
-            p.merging_date = p.merging_date[r < radius]
-            p.merging_id = p.merging_id[r < radius]
-            p.tracking_id = p.tracking_id[r < radius]
+        for name in p.fields:
+            if(name in part_vector_fields):
+                setattr(p,name,getattr(p,name)[:,r < radius])
+            else:
+                setattr(p,name,getattr(p,name)[r < radius])
         if(peak):
             p.peak_id = p.peak_id[r < radius]
             p.halo_id = p.halo_id[r < radius]

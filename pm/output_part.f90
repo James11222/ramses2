@@ -405,24 +405,6 @@ subroutine backup_part(r,g,p,filename)
      write(ilun)xdp
   endif
 
-  ! Write size
-  if(allocated(p%size))then
-     do i=1,p%npart
-        xdp(i)=p%size(i)
-     end do
-     write(ilun)xdp
-  endif
-
-  ! Write charge
-  if(allocated(p%charge))then
-     do i=1,p%npart
-        xdp(i)=p%charge(i)
-     end do
-     write(ilun)xdp
-  endif
-
-  deallocate(xdp)
-
   allocate(ll(1:p%npart))
 
   ! Write level
@@ -458,6 +440,24 @@ subroutine backup_part(r,g,p,filename)
   endif
 
   deallocate(ii8)
+
+  ! Write size
+  if(allocated(p%size))then
+     do i=1,p%npart
+        xdp(i)=p%size(i)
+     end do
+     write(ilun)xdp
+  endif
+
+  ! Write charge
+  if(allocated(p%charge))then
+     do i=1,p%npart
+        xdp(i)=p%charge(i)
+     end do
+     write(ilun)xdp
+  endif
+
+  deallocate(xdp)
 
   close(ilun)
 
