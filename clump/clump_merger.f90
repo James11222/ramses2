@@ -1656,6 +1656,11 @@ subroutine trim_clumps(s)
   if(s%r%tree)then
      call trim_particles(s,s%tree)
   endif
+#ifdef CORE
+  if(s%r%core)then
+     call trim_particles(s,s%core)
+  endif
+#endif
 
   ! Modify flag1 and flag2 accordingly
   call open_cache_clump(mdl, c, storage_size(dummy_prop_clump)/32, &

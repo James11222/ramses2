@@ -418,13 +418,11 @@ subroutine open_part_file(s,p,filename,nskip,ilun)
         ivar=ivar+1
         nskip(ivar+1)=nskip(ivar)+4*npart
      endif
-#ifdef CORE
      ! Specific internal energy
      if(allocated(p%up))then
         ivar=ivar+1
         nskip(ivar+1)=nskip(ivar)+4*npart
      endif
-#endif
      ! Levels
      ivar=ivar+1
      nskip(ivar+1)=nskip(ivar)+4*npart
@@ -564,13 +562,11 @@ subroutine close_part_file(s,p,filename,nskip,ilun)
         ivar=ivar+1
         nskip(ivar)=nskip(ivar)+4*p%npart
      endif
-#ifdef CORE
      ! Specific internal energy
      if(allocated(p%up))then
         ivar=ivar+1
         nskip(ivar)=nskip(ivar)+4*p%npart
      endif
-#endif
      ! Levels
      ivar=ivar+1
      nskip(ivar)=nskip(ivar)+4*p%npart

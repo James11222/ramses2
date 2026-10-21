@@ -261,6 +261,9 @@ recursive subroutine r_newdt_part(pst,ilevel,input_size,output,output_size)
      if (pst%s%r%tree) call newdt_part(pst%s%r,pst%s%g,pst%s%tree,ilevel,output%ekin,output%vmax)
      if (pst%s%r%trac) call newdt_part(pst%s%r,pst%s%g,pst%s%trac,ilevel,output%ekin,output%vmax)
      if (pst%s%r%dust) call newdt_part(pst%s%r,pst%s%g,pst%s%dust,ilevel,output%ekin,output%vmax)
+#ifdef CORE
+     if (pst%s%r%core) call newdt_part(pst%s%r,pst%s%g,pst%s%core,ilevel,output%ekin,output%vmax)
+#endif
   endif
 
 end subroutine r_newdt_part

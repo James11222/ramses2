@@ -115,6 +115,12 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
            filename=TRIM(filedir)//'dust_header.txt'
            call output_header(r,g,pst%s%dust,filename)
         endif
+#ifdef CORE
+        if(r%core)then
+           filename=TRIM(filedir)//'core_header.txt'
+           call output_header(r,g,pst%s%core,filename)
+        endif
+#endif
         call r_output_part(pst,input_array,flen/4,dummy,0)
      endif
   endif

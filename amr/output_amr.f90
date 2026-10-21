@@ -741,11 +741,9 @@ subroutine output_header(r,g,p,filename)
   if(allocated(p%tm))then
      write(ilun,'(a)',advance='no')'merging_date '
   endif
-#ifdef CORE
   if(allocated(p%up))then
      write(ilun,'(a)',advance='no')'internal_energy '
   endif
-#endif
   write(ilun,'(a)',advance='no')'level birth_id '
   if(allocated(p%idm))then
      write(ilun,'(a)',advance='no')'merging_id '

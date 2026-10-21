@@ -1071,10 +1071,6 @@ subroutine m_read_params(pst)
   rewind(1)
   read(1,NML=dust_params,END=118)
 118 continue
-#ifdef CORE
-  call read_core_params(1,s,hydro,nstarmax,pic,sf_model,star,nml_ok)
-#endif
-  close(1)
 
   ! Compute maximum number of star, sink and tree particles
   if(nstarmax==0)then
@@ -1102,6 +1098,11 @@ subroutine m_read_params(pst)
      ndustmax=int(ndusttot/int(s%g%ncpu,kind=8),kind=4)
      if(ndustmax==0)dust=.false.
   endif
+
+#ifdef CORE
+  call read_core_params(1,s,hydro,nstarmax,pic,sf_model,star,nml_ok)
+#endif
+  close(1)
 
   !-----------------
   ! Max size checks

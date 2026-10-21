@@ -442,7 +442,6 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
         iskip=iskip+4*npart_file(icpu)
      endif
 
-#ifdef CORE
      ! Read specific internal energy
      if(allocated(p%up))then
         ipos=iskip+4*(istart-1)
@@ -454,7 +453,6 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
         end do
         iskip=iskip+4*npart_file(icpu)
      endif
-#endif
 
      ! Read size
      if(allocated(p%size))then

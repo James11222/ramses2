@@ -488,7 +488,6 @@ subroutine input_part_restart(r,g,p,ncpu_file,npart_file,mpart_loc)
         iskip=iskip+nbyte*int(npart_file(icpu),8)
      endif
 
-#ifdef CORE
      ! Read specific internal energy
      if(allocated(p%up))then
         ipos=iskip+nbyte*int(istart-1,8)
@@ -500,7 +499,6 @@ subroutine input_part_restart(r,g,p,ncpu_file,npart_file,mpart_loc)
         end do
         iskip=iskip+nbyte*int(npart_file(icpu),8)
      endif
-#endif
 
      ! Read size
      if(allocated(p%size))then

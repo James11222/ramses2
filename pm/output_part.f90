@@ -210,7 +210,6 @@ subroutine output_part(s,p,filename)
      write(ilun)xsp
   endif
 
-#ifdef CORE
   ! Write specific internal energy
   if(allocated(p%up))then
      do i=1,p%npart
@@ -220,7 +219,6 @@ subroutine output_part(s,p,filename)
      write(ilun,POS=nskip(ivar))
      write(ilun)xsp
   endif
-#endif
 
   ! Write size
   if(allocated(p%size))then
@@ -399,7 +397,6 @@ subroutine backup_part(r,g,p,filename)
      write(ilun)xdp
   endif
 
-#ifdef CORE
   ! Write specific internal energy
   if(allocated(p%up))then
      do i=1,p%npart
@@ -407,7 +404,6 @@ subroutine backup_part(r,g,p,filename)
      end do
      write(ilun)xdp
   endif
-#endif
 
   ! Write size
   if(allocated(p%size))then
