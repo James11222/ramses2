@@ -31,7 +31,11 @@ subroutine m_dump_all(pst,write_bkp_file)
   type(in_output_poisson_t)::in_output_poisson
 
   associate(r=>pst%s%r,g=>pst%s%g,m=>pst%s%m,p=>pst%s%p,star=>pst%s%star, &
-   & sink=>pst%s%sink,tree=>pst%s%tree,trac=>pst%s%trac,dust=>pst%s%dust,mdl=>pst%s%mdl)
+   & sink=>pst%s%sink,tree=>pst%s%tree, &
+#ifdef CORE
+   & core=>pst%s%core, &
+#endif
+   & trac=>pst%s%trac,dust=>pst%s%dust,mdl=>pst%s%mdl)
 
   if(g%nstep_coarse==g%nstep_coarse_old.and.g%nstep_coarse>0)return
   if(g%nstep_coarse==0.and.r%nrestart>0)return
@@ -98,6 +102,12 @@ subroutine m_dump_all(pst,write_bkp_file)
         filename=TRIM(filedir)//'sink_header.txt'
         call output_header(r,g,sink,filename)
      endif
+#ifdef CORE
+     if(r%core)then
+        filename=TRIM(filedir)//'core_header.txt'
+        call output_header(r,g,core,filename)
+     endif
+#endif
      if(r%tree)then
         filename=TRIM(filedir)//'tree_header.txt'
         call output_header(r,g,tree,filename)
@@ -731,6 +741,11 @@ subroutine output_header(r,g,p,filename)
   if(allocated(p%tm))then
      write(ilun,'(a)',advance='no')'merging_date '
   endif
+#ifdef CORE
+  if(allocated(p%up))then
+     write(ilun,'(a)',advance='no')'internal_energy '
+  endif
+#endif
   write(ilun,'(a)',advance='no')'level birth_id '
   if(allocated(p%idm))then
      write(ilun,'(a)',advance='no')'merging_id '
