@@ -9,12 +9,12 @@ module part_device
        & box_ckey_min, box_ckey_max, box_size, periodic, &
        & rho, nref, f, &
        & swap_local, swap_global, prefix_sum, &
-       & xp, vp, mp, phip, levelp, sortp, idp, &
-       & star_xp, star_vp, star_mp, star_tp, star_zp, star_phip, &
+       & xp, vp, mp, levelp, sortp, idp, &
+       & star_xp, star_vp, star_mp, star_tp, star_zp, &
        & star_levelp, star_sortp, star_idp, &
-       & sink_xp, sink_vp, sink_mp, sink_tp, sink_phip, sink_fp, &
+       & sink_xp, sink_vp, sink_mp, sink_tp, sink_fp, &
        & sink_levelp, sink_sortp, sink_idp, sink_jp, sink_tm, sink_idm, &
-       & tree_xp, tree_vp, tree_mp, tree_tp, tree_tm, tree_phip, &
+       & tree_xp, tree_vp, tree_mp, tree_tp, tree_tm, &
        & tree_levelp, tree_sortp, tree_idp, tree_idm, tree_idt, &
        & xp_swap, isp_swap, idp_swap, &
        & gpu_scan, gpu_scan_dp, d_skip
@@ -431,14 +431,6 @@ subroutine gpu_split_part(sim, ilevel)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(mp, xp_swap, &
        & head_idx, num_parts)
 
-  ! Potential
-  if (allocated(phip)) then
-     call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, phip, &
-          & sortp, head_idx, num_parts)
-     call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(phip, xp_swap, &
-          & head_idx, num_parts)
-  endif
-
   ! Levels
   call sort_gather_part_i4_1d<<<num_blocks, num_threads>>>(isp_swap, levelp, &
        & sortp, head_idx, num_parts)
@@ -577,14 +569,6 @@ subroutine gpu_split_star(sim, ilevel)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(star_zp, xp_swap, &
        & head_idx, num_parts)
 
-  ! Potential
-  if (allocated(star_phip)) then
-     call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, star_phip, &
-          & star_sortp, head_idx, num_parts)
-     call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(star_phip, xp_swap, &
-          & head_idx, num_parts)
-  endif
-
   ! Levels
   call sort_gather_part_i4_1d<<<num_blocks, num_threads>>>(isp_swap, star_levelp, &
        & star_sortp, head_idx, num_parts)
@@ -592,19 +576,17 @@ subroutine gpu_split_star(sim, ilevel)
        & head_idx, num_parts)
 
   ! Particle ids
-  if (allocated(star_idp)) then
 #ifndef LONGINT
-     call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(isp_swap, star_idp, &
-          & star_sortp, head_idx, num_parts)
-     call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(star_idp, isp_swap, &
-          & head_idx, num_parts)
+  call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(isp_swap, star_idp, &
+       & star_sortp, head_idx, num_parts)
+  call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(star_idp, isp_swap, &
+       & head_idx, num_parts)
 #else
-     call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(idp_swap, star_idp, &
-          & star_sortp, head_idx, num_parts)
-     call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(star_idp, idp_swap, &
-          & head_idx, num_parts)
+  call sort_gather_part_i8_1d<<<num_blocks, num_threads>>>(idp_swap, star_idp, &
+       & star_sortp, head_idx, num_parts)
+  call sort_scatter_part_i8_1d<<<num_blocks, num_threads>>>(star_idp, idp_swap, &
+       & head_idx, num_parts)
 #endif
-  end if
   call nvtxEndRange()
 
   ! Bookkeeping
@@ -738,14 +720,6 @@ subroutine gpu_split_sink(sim, ilevel)
        & sink_sortp, head_idx, num_parts)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(sink_tm, xp_swap, &
        & head_idx, num_parts)
-
-  ! Potential
-  if (allocated(sink_phip)) then
-     call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, sink_phip, &
-          & sink_sortp, head_idx, num_parts)
-     call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(sink_phip, xp_swap, &
-          & head_idx, num_parts)
-  endif
 
   ! Levels
   call sort_gather_part_i4_1d<<<num_blocks, num_threads>>>(isp_swap, sink_levelp, &
@@ -895,14 +869,6 @@ subroutine gpu_split_tree(sim, ilevel)
        & tree_sortp, head_idx, num_parts)
   call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(tree_tm, xp_swap, &
        & head_idx, num_parts)
-
-  ! Potential
-  if (allocated(tree_phip)) then
-     call sort_gather_part_real_1d<<<num_blocks, num_threads>>>(xp_swap, tree_phip, &
-          & tree_sortp, head_idx, num_parts)
-     call sort_scatter_part_real_1d<<<num_blocks, num_threads>>>(tree_phip, xp_swap, &
-          & head_idx, num_parts)
-  endif
 
   ! Levels
   call sort_gather_part_i4_1d<<<num_blocks, num_threads>>>(isp_swap, tree_levelp, &

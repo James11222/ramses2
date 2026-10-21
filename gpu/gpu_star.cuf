@@ -251,7 +251,7 @@ end subroutine compute_star_swap_table
 ! =========================================================================
 attributes(global) subroutine star_formation_kernel(grid, uold, f, flag1, swap_local, swap_global, &
      & star_xp, star_vp, star_mp, star_tp, star_zp, star_levelp, star_idp, &
-     & head_idx, num_star, ilevel, levelmin, levelmax, dx, vol, mstar, d_skip, leading, &
+     & head_idx, num_star, ilevel, dx, vol, mstar, d_skip, leading, &
      & dt, texp, aexp, metal, imetal, z_ave, ientropy, dual_energy)
   use curand_device
   type(oct), device :: grid(*)
@@ -268,7 +268,7 @@ attributes(global) subroutine star_formation_kernel(grid, uold, f, flag1, swap_l
 
   integer(kind=8), intent(in), value :: leading
   integer(kind=4), intent(in), value :: head_idx, num_star
-  integer(kind=4), intent(in), value :: ilevel, levelmin, levelmax
+  integer(kind=4), intent(in), value :: ilevel
   real(kind=8), intent(in), value :: dx, vol, mstar
   real(kind=8), intent(in), value :: dt, texp, aexp, z_ave
   logical, intent(in), value :: metal
@@ -329,9 +329,7 @@ attributes(global) subroutine star_formation_kernel(grid, uold, f, flag1, swap_l
 
   ! Star level and birth id
   star_levelp(star_idx) = ilevel
-  if (levelmax > levelmin) then
-     star_idp(star_idx) = star_idx
-  endif
+  star_idp(star_idx) = star_idx
 
   ! Update gas density
   d_star = real(nstar, 8) * mstar / vol

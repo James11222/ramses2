@@ -67,7 +67,7 @@ recursive subroutine r_set_grid_device(pst)
         star_zp     = pst%s%star%zp
         star_levelp = pst%s%star%levelp
         star_sortp  = pst%s%star%sortp
-        if (allocated(star_idp)) star_idp = pst%s%star%idp
+        star_idp    = pst%s%star%idp
         call GPU_Error_Check(__FILE__, __LINE__)
         call nvtxEndRange()
      endif
@@ -209,7 +209,7 @@ subroutine gpu_to_host_part(pst)
      pst%s%star%zp     = star_zp
      pst%s%star%levelp = star_levelp
      pst%s%star%sortp  = star_sortp
-     if (allocated(star_idp)) pst%s%star%idp = star_idp
+     pst%s%star%idp    = star_idp
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
   endif
@@ -495,9 +495,6 @@ subroutine gpu_allocate_part(sim)
      allocate(pid(1:sim%r%npartmax))
      allocate(hid(1:sim%r%npartmax))
   endif
-#ifdef OUTPUT_PARTICLE_POTENTIAL
-  allocate(phip(1:sim%r%npartmax))
-#endif
   ! Particle scratch and prefix sum arrays
   scan_size = sim%r%npartmax
   call ensure_part_swap_capacity(scan_size)
@@ -521,14 +518,11 @@ subroutine gpu_allocate_star(sim)
   allocate(star_zp(1:sim%r%nstarmax))
   allocate(star_sortp(1:sim%r%nstarmax))
   allocate(star_levelp(1:sim%r%nstarmax))
-  if (sim%r%nlevelmax > sim%r%levelmin) allocate(star_idp(1:sim%r%nstarmax))
+  allocate(star_idp(1:sim%r%nstarmax))
   if (sim%r%clump_finder) then
      allocate(star_pid(1:sim%r%nstarmax))
      allocate(star_hid(1:sim%r%nstarmax))
   endif
-#ifdef OUTPUT_PARTICLE_POTENTIAL
-  allocate(star_phip(1:sim%r%nstarmax))
-#endif
   ! Particle scratch and prefix sum arrays
   scan_size = sim%r%nstarmax
   call ensure_part_swap_capacity(scan_size)
@@ -558,9 +552,6 @@ subroutine gpu_allocate_sink(sim)
   if (sim%r%clump_finder) allocate(sink_hid(1:sim%r%nsinkmax))
   allocate(sink_idp(1:sim%r%nsinkmax))
   allocate(sink_idm(1:sim%r%nsinkmax))
-#ifdef OUTPUT_PARTICLE_POTENTIAL
-  allocate(sink_phip(1:sim%r%nsinkmax))
-#endif
   ! Particle scratch and prefix sum arrays
   scan_size = sim%r%nsinkmax
   call ensure_part_swap_capacity(scan_size)
@@ -589,9 +580,6 @@ subroutine gpu_allocate_tree(sim)
   allocate(tree_idp(1:sim%r%ntreemax))
   allocate(tree_idm(1:sim%r%ntreemax))
   allocate(tree_idt(1:sim%r%ntreemax))
-#ifdef OUTPUT_PARTICLE_POTENTIAL
-  allocate(tree_phip(1:sim%r%ntreemax))
-#endif
   ! Particle scratch and prefix sum arrays (trees are massless: no CIC deposit workspace)
   scan_size = sim%r%ntreemax
   call ensure_part_swap_capacity(scan_size)

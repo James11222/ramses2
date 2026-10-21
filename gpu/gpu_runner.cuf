@@ -44,7 +44,7 @@ module gpu_runner
 
   !> Arrays to hold the dark matter particle variables on the device
   real(kind=dp),   device, allocatable, dimension(:,:) :: xp, vp
-  real(kind=dp),   device, allocatable, dimension(:)   :: mp, phip
+  real(kind=dp),   device, allocatable, dimension(:)   :: mp
   integer(kind=4), device, allocatable, dimension(:)   :: levelp
   integer(kind=4), device, allocatable, target, dimension(:)   :: sortp
   integer(i8b),    device, allocatable, dimension(:)   :: idp
@@ -52,7 +52,7 @@ module gpu_runner
 
   !> Arrays to hold the star particle variables on the device
   real(kind=dp),   device, allocatable, dimension(:,:) :: star_xp, star_vp
-  real(kind=dp),   device, allocatable, dimension(:)   :: star_mp, star_phip
+  real(kind=dp),   device, allocatable, dimension(:)   :: star_mp
   real(kind=dp),   device, allocatable, dimension(:)   :: star_tp, star_zp
   integer(kind=4), device, allocatable, dimension(:)   :: star_levelp
   integer(kind=4), device, allocatable, target, dimension(:)   :: star_sortp
@@ -62,7 +62,7 @@ module gpu_runner
   !> Arrays to hold the star particle variables on the device
   real(kind=dp),   device, allocatable, dimension(:,:) :: sink_xp, sink_vp
   real(kind=dp),   device, allocatable, dimension(:,:) :: sink_fp, sink_jp
-  real(kind=dp),   device, allocatable, dimension(:)   :: sink_mp, sink_phip
+  real(kind=dp),   device, allocatable, dimension(:)   :: sink_mp
   real(kind=dp),   device, allocatable, dimension(:)   :: sink_tp
   integer(kind=4), device, allocatable, dimension(:)   :: sink_levelp
   integer(kind=4), device, allocatable, target, dimension(:)   :: sink_sortp
@@ -74,7 +74,7 @@ module gpu_runner
 
   !> Arrays to hold the merger tree particle variables on the device
   real(kind=dp),   device, allocatable, dimension(:,:) :: tree_xp, tree_vp
-  real(kind=dp),   device, allocatable, dimension(:)   :: tree_mp, tree_phip
+  real(kind=dp),   device, allocatable, dimension(:)   :: tree_mp
   real(kind=dp),   device, allocatable, dimension(:)   :: tree_tp, tree_tm
   integer(kind=4), device, allocatable, dimension(:)   :: tree_levelp
   integer(kind=4), device, allocatable, target, dimension(:)   :: tree_sortp
@@ -1375,7 +1375,7 @@ contains
       call nvtxStartRange("Create New Star Particles", color=3)!blue
       call star_formation_kernel<<<num_blocks, num_threads>>>(grid, uold, f, flag2, swap_local, swap_global, &
            & star_xp, star_vp, star_mp, star_tp, star_zp, star_levelp, star_idp, &
-           & head_part, npart_new, ilevel, sim%r%levelmin, sim%r%nlevelmax, &
+           & head_part, npart_new, ilevel, &
            & dx, vol, mstar, d_skip, int(sim%r%nstarmax,8), &
            & sim%g%dtnew(ilevel), sim%g%texp, sim%g%aexp, &
            & sim%r%metal, sim%r%imetal, sim%r%z_ave, sim%r%ientropy, sim%r%dual_energy)
