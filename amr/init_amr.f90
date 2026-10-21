@@ -75,7 +75,7 @@ recursive subroutine r_init_amr(pst)
 #ifdef _CUDA
      call gpu_allocate_amr(pst%s)
      if(pst%s%r%poisson) call gpu_allocate_mg(pst%s)
-     if(pst%s%r%clump_finder .or. pst%s%r%sink_form)then
+     if(pst%s%r%clump_finder .or. pst%s%r%sink_form .or. pst%s%r%tree)then
         call gpu_allocate_clump(pst%s)
      endif
 #endif

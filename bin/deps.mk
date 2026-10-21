@@ -9,7 +9,7 @@ boundaries.o: amr_commons.o amr_parameters.o cr_parameters.o hydro_parameters.o 
 cache.o: amr_commons.o amr_parameters.o cache_commons.o clfind_commons.o hash.o hilbert.o mdl.o
 cache_commons.o: amr_parameters.o call_back.o cr_parameters.o hydro_parameters.o rt_parameters.o
 call_back.o: amr_commons.o amr_parameters.o clfind_commons.o ramses_commons.o
-clfind_commons.o: hash.o
+clfind_commons.o: amr_parameters.o hash.o
 clump_finder.o: amr_parameters.o boundaries.o cache.o cache_commons.o clump_merger.o marshal.o mdl.o mdl_commons.o multigrid_fine_coarse.o nbors_utils.o output_amr.o output_clump.o output_part.o ramses_commons.o
 clump_merger.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o clfind_commons.o hash.o hilbert.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o ramses_commons.o
 condinit.o: amr_commons.o amr_parameters.o constants.o hydro_parameters.o input_hydro_condinit.o
@@ -33,7 +33,7 @@ cr_upload.o: amr_commons.o amr_parameters.o cache.o cache_commons.o cr_parameter
 cross_sections_module.o: constants.o
 domain_hilbert.o: amr_parameters.o hilbert.o
 feedback.o: amr_parameters.o boundaries.o cache.o cache_commons.o cr_parameters.o godunov_fine.o hilbert.o hydro_parameters.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o ramses_commons.o
-flag_utils.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o hilbert.o hydro_flag.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o ramses_commons.o rt_flag.o smooth.o
+flag_utils.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o hilbert.o hydro_flag.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o pm_parameters.o ramses_commons.o rt_flag.o smooth.o
 force_fine.o: multigrid_fine_coarse.o
 gadgetreadfile.o: amr_parameters.o
 godunov_fine.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o hydro_commons.o hydro_parameters.o marshal.o mdl.o mdl_commons.o nbors_utils.o ramses_commons.o
@@ -218,6 +218,7 @@ smooth.o: gpu_runner.o
 star_formation.o: gpu_runner.o
 synchro_hydro_fine.o: gpu_runner.o
 task_manager.o: gpu_manager.o
+tree_formation.o: gpu_clump.o
 turb_driving.o: gpu_runner.o
 turb_hydro.o: gpu_runner.o
 turb_init.o: gpu_manager.o

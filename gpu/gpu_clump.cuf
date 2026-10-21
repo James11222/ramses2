@@ -1,6 +1,6 @@
 !> GPU Clump Finder and Merger CUDA kernels.
 module clump_device
-  use amr_parameters, only: dp, ndim, twotondim, nbin
+  use amr_parameters, only: dp, ndim, twotondim, nbin, i8b, MAXLEVEL
   use hydro_parameters, only: nvar
   use oct_commons, only: oct
   use gpu_utils
@@ -10,6 +10,7 @@ module clump_device
        sink_xp, sink_levelp, sink_pid, sink_vp, sink_fp, sink_mp, sink_tp, sink_idp, swap_local, &
        prefix_sum, box_size, xp, vp, mp, star_xp, star_vp, star_mp, &
        sink_jp, sink_tm, sink_idm, pid, hid, star_pid, star_hid, sink_hid
+  use gpu_runner, only: tree_xp, tree_vp, tree_tm, tree_idp, tree_idm, tree_idt, tree_pid
   use part_device, only: dtnew_part_d
   implicit none
 
@@ -75,6 +76,11 @@ module clump_device
   real(kind=dp), device, allocatable, dimension(:,:) :: mass_bin_d
   real(kind=dp), device, allocatable, dimension(:,:) :: phi_clump_d
   integer, device, allocatable, dimension(:)         :: nsink_d
+  integer, device, allocatable, dimension(:)         :: ntree_d
+  integer(i8b), device, allocatable, dimension(:)    :: min_tree_id_d
+
+  ! Time step per level in dp for the tree kernels (filled by the host drivers)
+  real(kind=dp), device, dimension(1:MAXLEVEL)       :: dtnew_dp_d
 
 contains
 
@@ -91,7 +97,7 @@ contains
     integer :: ntestmax, nclumpmax
     logical :: do_halo, do_profile
 
-    do_halo = (sim%r%clump_finder .and. sim%r%saddle_threshold > 0) .or. &
+    do_halo = ((sim%r%clump_finder .or. sim%r%tree) .and. sim%r%saddle_threshold > 0) .or. &
          & (sim%r%sink_form .and. sim%r%sink_saddle_threshold > 0)
     do_profile = (sim%r%clump_finder .and. sim%r%saddle_threshold > 0 .and. &
          & sim%r%part .and. sim%r%rho_type_clump == 1)
@@ -145,6 +151,10 @@ contains
     if (sim%r%sink) then
        if (.not. allocated(nsink_d))       allocate(nsink_d(1:nclumpmax))
     endif
+    if (sim%r%tree) then
+       if (.not. allocated(ntree_d))       allocate(ntree_d(1:nclumpmax))
+       if (.not. allocated(min_tree_id_d)) allocate(min_tree_id_d(1:nclumpmax))
+    endif
   end subroutine gpu_allocate_clump
 
   ! =========================================================================
@@ -189,6 +199,8 @@ contains
     if (allocated(mass_bin_d))       deallocate(mass_bin_d)
     if (allocated(phi_clump_d))      deallocate(phi_clump_d)
     if (allocated(nsink_d))          deallocate(nsink_d)
+    if (allocated(ntree_d))          deallocate(ntree_d)
+    if (allocated(min_tree_id_d))    deallocate(min_tree_id_d)
   end subroutine gpu_deallocate_clump
 
   ! =========================================================================
@@ -2612,6 +2624,73 @@ contains
   end subroutine gpu_sink_clump
 
   ! =========================================================================
+  ! Host Driver: Clump finding for merger tree particles on the GPU
+  ! =========================================================================
+  subroutine gpu_tree_clump(sim)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+
+#if NDIM==3 && defined(GRAV)
+    ! 0. The GPU clump finder works on a single MPI rank only
+    if (sim%g%ncpu > 1) then
+       write(*,*) 'gpu_tree_clump: GPU merger tree formation requires a single MPI rank'
+       stop
+    endif
+
+    ! 1. Load clump finder parameters
+    sim%c%relevance_threshold = sim%r%relevance_threshold
+    sim%c%density_threshold   = sim%r%density_threshold
+    sim%c%saddle_threshold    = sim%r%saddle_threshold
+    sim%c%mass_threshold      = sim%r%mass_threshold
+    sim%c%purity_threshold    = sim%r%purity_threshold
+    sim%c%fraction_threshold  = 2d0
+
+    ! 2. Smooth density field
+    call gpu_smooth_rho(sim)
+
+    ! 3. Collect test cells above threshold
+    call gpu_collect_test(sim, sim%c%ntest)
+    sim%c%ntest_tot = sim%c%ntest
+    if (sim%g%myid == 1) then
+       write(*,'(" Found",I12,"  cells above threshold")')int(sim%c%ntest_tot,kind=4)
+    endif
+    if (sim%c%ntest_tot == 0) return
+
+    ! 4. Detect local density peaks
+    call gpu_collect_peak(sim, sim%c%ntest, sim%c%npeak)
+    sim%c%npeak_tot = sim%c%npeak
+    if (sim%g%myid == 1) then
+       write(*,'(" Found",I12,"  density peaks")')int(sim%c%npeak_tot,kind=4)
+    endif
+    if (sim%c%npeak_tot == 0) return
+
+    ! 5. Watershed segmentation
+    call gpu_collect_patch(sim, sim%c%ntest, sim%c%npeak)
+
+    ! 6. Merge irrelevant peak-patches
+    call gpu_merge_clumps(sim, 'relevance', sim%c%ntest, sim%c%npeak)
+
+    ! 7. Peak-patch properties
+    call gpu_compute_clump_properties(sim, sim%r%rho_type_clump, sim%c%ntest, sim%c%npeak)
+
+    ! 8. Dark matter particle-based peak-patch properties
+    if (sim%r%part .and. sim%r%rho_type_clump == 1) then
+       call gpu_particle_clump_properties(sim, 1, sim%c%npeak)
+    endif
+
+    ! 9. Merge peak-patches into halo-patches
+    if (sim%c%saddle_threshold > 0) then
+       call gpu_merge_clumps(sim, 'saddleden', sim%c%ntest, sim%c%npeak)
+    endif
+
+    ! 10. Map trees to peaks, reset tree positions to peak positions and count trees
+    call gpu_particle_peak_id(sim, 4)
+    call gpu_tree_in_peak(sim, .true., .true.)
+#endif
+  end subroutine gpu_tree_clump
+
+  ! =========================================================================
   ! Device Function: Peak patch id (flag2) of the cell containing a particle
   ! =========================================================================
   attributes(device) function particle_peak_id_device(x, ilevel, boxlen, flag2, &
@@ -2715,11 +2794,12 @@ contains
     use ramses_commons, only: ramses_t
     implicit none
     type(ramses_t) :: sim
-    integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars, 3 = sinks
+    integer, intent(in) :: ptype ! 1 = dark matter, 2 = stars, 3 = sinks, 4 = trees
 
     if (ptype == 1) call launch_particle_id(sim, sim%p,    xp,      pid,      flag2, int(sim%r%npartmax, kind=8))
     if (ptype == 2) call launch_particle_id(sim, sim%star, star_xp, star_pid, flag2, int(sim%r%nstarmax, kind=8))
     if (ptype == 3) call launch_particle_id(sim, sim%sink, sink_xp, sink_pid, flag2, int(sim%r%nsinkmax, kind=8))
+    if (ptype == 4) call launch_particle_id(sim, sim%tree, tree_xp, tree_pid, flag2, int(sim%r%ntreemax, kind=8))
   end subroutine gpu_particle_peak_id
 
   ! =========================================================================
@@ -2868,6 +2948,194 @@ contains
        sim%c%nsink(1:sim%c%npeak) = nsink_d(1:sim%c%npeak)
     endif
   end subroutine gpu_sink_in_peak
+
+  ! =========================================================================
+  ! CUDA Kernel: Reset bound tree particles to their peak, keep the min id
+  ! =========================================================================
+  attributes(global) subroutine tree_recenter_kernel(ntree, grav, boxlen)
+    integer, value :: ntree
+    real(kind=dp), value :: grav, boxlen
+    integer :: ipart, gid, tid, idim
+    integer :: peak_nr, ilevel
+    integer(i8b) :: info
+    real(kind=dp) :: radius, rad2, vel2, v2, r2
+    logical :: bound
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > ntree) return
+
+    ipart = gid
+    peak_nr = tree_pid(ipart)
+    if (peak_nr <= 0) return
+
+    ! Compute peak's central core properties
+    ilevel = peak_level_d(peak_nr)
+    radius = 2.0_dp * boxlen / (2**ilevel)
+    rad2 = radius**2
+    ! Compute relative velocity and distance
+    v2 = 0.0_dp
+    r2 = 0.0_dp
+    do idim = 1, ndim
+       v2 = v2 + (tree_vp(ipart, idim) - peak_vel_d(idim, peak_nr))**2
+       r2 = r2 + (tree_xp(ipart, idim) - peak_com_d(idim, peak_nr))**2
+    end do
+    ! Compute boundness criteria (a peak without particle mass binds nothing)
+    bound = .false.
+    if (particle_mass_d(peak_nr) > 0.0_dp) then
+       vel2 = grav * particle_mass_d(peak_nr) / radius
+       bound = ( v2/vel2 + 2.0_dp*sqrt(r2/rad2) < 20.0_dp )
+    endif
+
+    if (bound) then
+       ! If not merged yet then mark as merger candidate
+       if (tree_idm(ipart) == 0) tree_idm(ipart) = -2
+       do idim = 1, ndim
+          ! Compute tree particle position from peak position
+          tree_xp(ipart, idim) = peak_com_d(idim, peak_nr)
+          ! Compute tree particle velocity from peak velocity
+          tree_vp(ipart, idim) = peak_vel_d(idim, peak_nr) - peak_acc_d(idim, peak_nr) * 0.5_dp * dtnew_dp_d(ilevel)
+       end do
+       ! Update minimum tree id in each clump
+       info = atomicmin(min_tree_id_d(peak_nr), tree_idp(ipart))
+    endif
+  end subroutine tree_recenter_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Merge the tree particles that sit in the same clump
+  ! =========================================================================
+  attributes(global) subroutine tree_merge_kernel(ntree, texp)
+    integer, value :: ntree
+    real(kind=dp), value :: texp
+    integer :: ipart, gid, tid, peak_nr
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > ntree) return
+
+    ipart = gid
+    peak_nr = tree_pid(ipart)
+
+    ! Set tracking id to zero for orphan merger tree tracer particles
+    if (peak_nr <= 0) then
+       tree_idt(ipart) = 0
+       return
+    endif
+    ! If tree particle is not bound and not merged, set as orphan with zero tracking id
+    if (tree_idm(ipart) == 0) tree_idt(ipart) = 0
+    if (tree_idm(ipart) == -2) then
+       if (tree_idp(ipart) /= min_tree_id_d(peak_nr)) then
+          ! Bound and just merged: update merging age, merge-to id and tracking id
+          tree_idm(ipart) = min_tree_id_d(peak_nr)
+          tree_tm(ipart) = texp
+       else
+          ! Bound and not merged: update its tracking id
+          tree_idm(ipart) = 0
+       endif
+       tree_idt(ipart) = peak_nr
+    endif
+  end subroutine tree_merge_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Map each active tree to its peak and increment tree count
+  ! =========================================================================
+  attributes(global) subroutine gpu_count_trees_kernel(ntree)
+    integer, value :: ntree
+    integer :: ipart, gid, tid
+    integer :: global_peak_id
+    integer :: peak_nr, info
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > ntree) return
+
+    ipart = gid
+    global_peak_id = tree_pid(ipart)
+
+    if (global_peak_id > 0) then
+       peak_nr = int(global_peak_id)
+       info = atomicadd(ntree_d(peak_nr), 1)
+    endif
+  end subroutine gpu_count_trees_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Accumulate tree counts hierarchically from merged sub-peaks
+  ! =========================================================================
+  attributes(global) subroutine gpu_hierarchical_tree_count_kernel(npeak, ilev)
+    integer, value :: npeak
+    integer, value :: ilev
+    integer :: ipeak, gid, tid, jpeak, info
+    integer :: merge_to
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    ipeak = gid
+
+    if (lev_peak_d(ipeak) == ilev) then
+       merge_to = new_peak_d(ipeak)
+       ! Check if merged into a different parent peak
+       if (merge_to /= ipeak) then
+          jpeak = int(merge_to)
+          info = atomicadd(ntree_d(jpeak), ntree_d(ipeak))
+       endif
+    endif
+  end subroutine gpu_hierarchical_tree_count_kernel
+
+  ! =========================================================================
+  ! Host Driver: Reset trees to peaks, merge them and count trees per peak/halo
+  ! =========================================================================
+  subroutine gpu_tree_in_peak(sim, reset_tree_pos, count_tree)
+    use ramses_commons, only: ramses_t
+    implicit none
+    type(ramses_t) :: sim
+    logical, intent(in) :: reset_tree_pos, count_tree
+
+    integer :: block_size, grid_size_trees, grid_size_peaks
+    integer :: ilev
+    real(kind=8) :: pi, grav
+    real(kind=dp), dimension(1:MAXLEVEL) :: dtnew_dp
+
+    if (sim%c%npeak == 0) return
+
+    block_size = 256
+    grid_size_trees = (sim%tree%npart + block_size - 1) / block_size
+    grid_size_peaks = (sim%c%npeak + block_size - 1) / block_size
+
+    ! 1. Reset tree particle positions to peak position
+    if (reset_tree_pos) then
+       min_tree_id_d(1:sim%c%npeak) = huge(0_i8b)
+       if (sim%tree%npart > 0) then
+          pi = acos(-1.0d0)
+          grav = 1.0d0
+          if (sim%r%cosmo) grav = 3.0d0/8.0d0/pi*sim%g%omega_m*sim%g%aexp
+          dtnew_dp = real(sim%g%dtnew, kind=dp)
+          dtnew_dp_d = dtnew_dp
+          call tree_recenter_kernel<<<grid_size_trees, block_size>>>(sim%tree%npart, &
+               & real(grav, kind=dp), real(sim%r%boxlen, kind=dp))
+       endif
+    endif
+
+    ! 2. Merge all tree particles that sit in the same clump
+    if (sim%tree%npart > 0) then
+       call tree_merge_kernel<<<grid_size_trees, block_size>>>(sim%tree%npart, &
+            & real(sim%g%texp, kind=dp))
+    endif
+
+    ! 3. Count tree particles in each peak, then hierarchically in each halo
+    if (count_tree) then
+       ntree_d = 0
+       if (sim%tree%npart > 0) then
+          call gpu_count_trees_kernel<<<grid_size_trees, block_size>>>(sim%tree%npart)
+       endif
+       if (sim%c%saddle_threshold > 0.0d0) then
+          do ilev = 0, sim%c%merge_levelmax
+             call gpu_hierarchical_tree_count_kernel<<<grid_size_peaks, block_size>>>(sim%c%npeak, ilev)
+          end do
+       endif
+    endif
+  end subroutine gpu_tree_in_peak
 
   ! =========================================================================
   ! CUDA Kernel: Evaluate sink formation sites on the GPU
