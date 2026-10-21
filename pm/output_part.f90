@@ -220,28 +220,6 @@ subroutine output_part(s,p,filename)
      write(ilun)xsp
   endif
 
-  ! Write size
-  if(allocated(p%size))then
-     do i=1,p%npart
-        xsp(i)=p%size(i)
-     end do
-     ivar=ivar+1
-     write(ilun,POS=nskip(ivar))
-     write(ilun)xsp
-  endif
-
-  ! Write charge
-  if(allocated(p%charge))then
-     do i=1,p%npart
-        xsp(i)=p%charge(i)
-     end do
-     ivar=ivar+1
-     write(ilun,POS=nskip(ivar))
-     write(ilun)xsp
-  endif
-
-  deallocate(xsp)
-
   allocate(ll(1:p%npart))
 
   ! Write level
@@ -285,6 +263,28 @@ subroutine output_part(s,p,filename)
   endif
 
   deallocate(ii8)
+
+  ! Write size
+  if(allocated(p%size))then
+     do i=1,p%npart
+        xsp(i)=p%size(i)
+     end do
+     ivar=ivar+1
+     write(ilun,POS=nskip(ivar))
+     write(ilun)xsp
+  endif
+
+  ! Write charge
+  if(allocated(p%charge))then
+     do i=1,p%npart
+        xsp(i)=p%charge(i)
+     end do
+     ivar=ivar+1
+     write(ilun,POS=nskip(ivar))
+     write(ilun)xsp
+  endif
+
+  deallocate(xsp)
 
   call close_part_file(s,p,filename,nskip,ilun)
 

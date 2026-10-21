@@ -454,32 +454,6 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
         iskip=iskip+4*npart_file(icpu)
      endif
 
-     ! Read size
-     if(allocated(p%size))then
-        ipos=iskip+4*(istart-1)
-        read(10,POS=ipos)xsp
-        ipart=ipart_old
-        do i=istart,iend
-           ipart=ipart+1
-           p%size(ipart)=xsp(i)
-        end do
-        iskip=iskip+4*npart_file(icpu)
-     endif
-
-     ! Read charge
-     if(allocated(p%charge))then
-        ipos=iskip+4*(istart-1)
-        read(10,POS=ipos)xsp
-        ipart=ipart_old
-        do i=istart,iend
-           ipart=ipart+1
-           p%charge(ipart)=xsp(i)
-        end do
-        iskip=iskip+4*npart_file(icpu)
-     endif
-
-     deallocate(xsp)
-
      allocate(isp(istart:iend))
 
      ! Read level
@@ -555,6 +529,32 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
      endif
 
      deallocate(isp8)
+
+     ! Read size
+     if(allocated(p%size))then
+        ipos=iskip+4*(istart-1)
+        read(10,POS=ipos)xsp
+        ipart=ipart_old
+        do i=istart,iend
+           ipart=ipart+1
+           p%size(ipart)=xsp(i)
+        end do
+        iskip=iskip+4*npart_file(icpu)
+     endif
+
+     ! Read charge
+     if(allocated(p%charge))then
+        ipos=iskip+4*(istart-1)
+        read(10,POS=ipos)xsp
+        ipart=ipart_old
+        do i=istart,iend
+           ipart=ipart+1
+           p%charge(ipart)=xsp(i)
+        end do
+        iskip=iskip+4*npart_file(icpu)
+     endif
+
+     deallocate(xsp)
 
      ! Close the particle file
      close(10)
