@@ -72,6 +72,16 @@ module gpu_runner
   real(kind=dp),   device, allocatable, dimension(:)   :: sink_tm
   integer(i8b),    device, allocatable, dimension(:)   :: sink_idm
 
+  !> Arrays to hold the merger tree particle variables on the device
+  real(kind=dp),   device, allocatable, dimension(:,:) :: tree_xp, tree_vp
+  real(kind=dp),   device, allocatable, dimension(:)   :: tree_mp, tree_phip
+  real(kind=dp),   device, allocatable, dimension(:)   :: tree_tp, tree_tm
+  integer(kind=4), device, allocatable, dimension(:)   :: tree_levelp
+  integer(kind=4), device, allocatable, target, dimension(:)   :: tree_sortp
+  integer(i8b),    device, allocatable, dimension(:)   :: tree_idp, tree_idm
+  integer(kind=4), device, allocatable, dimension(:)   :: tree_idt
+  integer(kind=4), device, allocatable, dimension(:)   :: tree_pid, tree_hid
+
   !> xp_swap/isp_swap/idp_swap: gather/scatter scratch and other tasks.
   real(kind=dp),   device, allocatable, dimension(:) :: xp_swap
   integer(kind=8), device, allocatable, target, dimension(:) :: idp_swap

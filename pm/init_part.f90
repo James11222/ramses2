@@ -53,6 +53,9 @@ recursive subroutine r_init_part(pst)
 #endif
      if(pst%s%r%tree)then
         call init_tree(pst%s%r,pst%s%g,pst%s%tree)
+#ifdef _CUDA
+        call gpu_allocate_tree(pst%s)
+#endif
      end if
      if(pst%s%r%trac)then
         call init_trac(pst%s%r,pst%s%g,pst%s%trac)

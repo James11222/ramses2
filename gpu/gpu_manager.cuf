@@ -91,6 +91,24 @@ recursive subroutine r_set_grid_device(pst)
         call nvtxEndRange()
      endif
 
+     ! Tree particle H→D
+     if (pst%s%r%tree .and. allocated(pst%s%tree%xp) .and. allocated(tree_xp)) then
+        call nvtxStartRange("Copy tree from host to device", color=5)!red
+        tree_xp     = pst%s%tree%xp
+        tree_vp     = pst%s%tree%vp
+        tree_mp     = pst%s%tree%mp
+        tree_tp     = pst%s%tree%tp
+        tree_tm     = pst%s%tree%tm
+        tree_levelp = pst%s%tree%levelp
+        tree_sortp  = pst%s%tree%sortp
+        tree_idp    = pst%s%tree%idp
+        tree_idm    = pst%s%tree%idm
+        tree_idt    = pst%s%tree%idt
+        if (allocated(tree_pid) .and. allocated(pst%s%tree%pid)) tree_pid = pst%s%tree%pid
+        call GPU_Error_Check(__FILE__, __LINE__)
+        call nvtxEndRange()
+     endif
+
      ! Insert entire grid in the device hash table
      head_idx = 1
      num_octs = pst%s%m%ifree - 1
@@ -212,6 +230,23 @@ subroutine gpu_to_host_part(pst)
      pst%s%sink%idp    = sink_idp
      pst%s%sink%idm    = sink_idm
      if (allocated(sink_pid) .and. allocated(pst%s%sink%pid)) pst%s%sink%pid = sink_pid
+     call GPU_Error_Check(__FILE__, __LINE__)
+     call nvtxEndRange()
+  endif
+
+  if (allocated(tree_xp)) then
+     call nvtxStartRange("Copy tree from device to host", color=5)!red
+     pst%s%tree%xp     = tree_xp
+     pst%s%tree%vp     = tree_vp
+     pst%s%tree%mp     = tree_mp
+     pst%s%tree%tp     = tree_tp
+     pst%s%tree%tm     = tree_tm
+     pst%s%tree%levelp = tree_levelp
+     pst%s%tree%sortp  = tree_sortp
+     pst%s%tree%idp    = tree_idp
+     pst%s%tree%idm    = tree_idm
+     pst%s%tree%idt    = tree_idt
+     if (allocated(tree_pid) .and. allocated(pst%s%tree%pid)) pst%s%tree%pid = tree_pid
      call GPU_Error_Check(__FILE__, __LINE__)
      call nvtxEndRange()
   endif
@@ -554,6 +589,43 @@ subroutine gpu_allocate_sink(sim)
   call ensure_scan_capacity(scan_size, sim%r%sink_dep_algo)
 
 end subroutine gpu_allocate_sink
+!###########################################################
+!###########################################################
+!###########################################################
+!###########################################################
+subroutine gpu_allocate_tree(sim)
+  use amr_parameters, ONLY: ndim
+  implicit none
+  type(ramses_t) :: sim
+  integer :: scan_size
+
+  allocate(tree_xp(1:sim%r%ntreemax, 1:ndim))
+  allocate(tree_vp(1:sim%r%ntreemax, 1:ndim))
+  allocate(tree_mp(1:sim%r%ntreemax))
+  allocate(tree_tp(1:sim%r%ntreemax))
+  allocate(tree_tm(1:sim%r%ntreemax))
+  allocate(tree_sortp(1:sim%r%ntreemax))
+  allocate(tree_levelp(1:sim%r%ntreemax))
+  allocate(tree_pid(1:sim%r%ntreemax))
+  if (sim%r%clump_finder) allocate(tree_hid(1:sim%r%ntreemax))
+  allocate(tree_idp(1:sim%r%ntreemax))
+  allocate(tree_idm(1:sim%r%ntreemax))
+  allocate(tree_idt(1:sim%r%ntreemax))
+#ifdef OUTPUT_PARTICLE_POTENTIAL
+  allocate(tree_phip(1:sim%r%ntreemax))
+#endif
+  if (.not. allocated(xp_swap)) allocate(xp_swap(1:sim%r%ntreemax))
+  if (.not. allocated(isp_swap)) allocate(isp_swap(1:sim%r%ntreemax))
+  if (.not. allocated(idp_swap)) allocate(idp_swap(1:sim%r%ntreemax))
+  ! CUB workspace
+#if defined(CUB_SORT_PART)
+  if (.not. allocated(hkeyp)) allocate(hkeyp(1:sim%r%ntreemax))
+#endif
+  ! Prefix sum arrays (trees are massless: no CIC deposit workspace)
+  scan_size = sim%r%ntreemax
+  call ensure_scan_capacity(scan_size, 1)
+
+end subroutine gpu_allocate_tree
 !###########################################################
 !###########################################################
 !###########################################################
