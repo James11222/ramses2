@@ -633,8 +633,6 @@ subroutine pack_fetch_minid(c,local_peak_id,msg_size,msg_array)
   type(msg_tree_minid)::msg
 
   msg%id = c%min_tree_id(local_peak_id)
-  msg%ind = c%ind_halo(local_peak_id)
-  msg%mass = c%particle_mass(local_peak_id)
 
   msg_array=transfer(msg,msg_array)
 
@@ -657,8 +655,6 @@ subroutine unpack_fetch_minid(c,local_peak_id,msg_size,msg_array)
   msg=transfer(msg_array,msg)
 
   c%min_tree_id(local_peak_id) = msg%id
-  c%ind_halo(local_peak_id) = msg%ind
-  c%particle_mass(local_peak_id) = msg%mass
 
 end subroutine unpack_fetch_minid
 !################################################################

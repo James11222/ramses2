@@ -1344,7 +1344,7 @@ subroutine gpu_sort_tree(sim, ilevel)
   type(ramses_t), intent(inout) :: sim
   integer, intent(in) :: ilevel
 
-  integer(kind=4) :: head_idx, tail_idx, num_parts, val
+  integer(kind=4) :: head_idx, tail_idx, num_parts
   integer :: num_threads, num_blocks, nblks
   integer, parameter :: nrnd = 16, nthr = 128
   integer :: ibit, level
@@ -1364,11 +1364,6 @@ subroutine gpu_sort_tree(sim, ilevel)
   dx = sim%r%boxlen/2**level
   dx_inv = 1d0 / dx
 
-  ! The shifted-source deposits (part_dep_algo=2 medium, 3 small) sort by the
-  ! half-cell shifted source cell (upper corner of the 2x2x2 CIC block). The
-  ! +1/2 shift can push the source cell to the upper edge of the computational
-  ! box, which is wrapped back to box_ckey_min before keying (GPU runs are
-  ! periodic). The large deposit (1) is unshifted.
   ! Trees are massless and never deposited: unshifted Hilbert sort
   shift = 0.0_dp
 

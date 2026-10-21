@@ -167,8 +167,6 @@ module cache_commons
   end type msg_tree_clump
   type msg_tree_minid
      integer(i8b)::id
-     integer(kind=8)::ind
-     real(kind=8)::mass
   end type msg_tree_minid
 
   ! Cache call back functions
