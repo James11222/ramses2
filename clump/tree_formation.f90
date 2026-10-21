@@ -361,7 +361,7 @@ end subroutine tree_clump
 !##############################################################################
 !##############################################################################
 subroutine tree_in_peak(s,reset_tree_pos,count_tree)
-  use amr_parameters, only: i8b
+  use amr_parameters, only: ndim, i8b
   use ramses_commons, only: ramses_t
   use clump_merger_module
   use cache_commons, only: msg_tree_clump,msg_tree_minid
@@ -370,13 +370,14 @@ subroutine tree_in_peak(s,reset_tree_pos,count_tree)
   type(ramses_t)::s
   logical::count_tree,reset_tree_pos
 
-  integer::i,ipart,peak_nr,halo_nr,ilev,ipeak,jpeak
+  integer::i,ipart,idim,peak_nr,halo_nr,ilev,ipeak,jpeak
   integer(kind=8)::global_peak_id,merge_to
   type(msg_tree_clump)::dummy_tree_clump
   type(msg_tree_minid)::dummy_tree_minid
 
   logical::bound
   real(kind=8)::pi,grav,r2,v2,rad2,vel2,radius
+  real(kind=8),dimension(1:ndim)::xpart
 
   associate(r=>s%r,g=>s%g,m=>s%m,c=>s%c,p=>s%tree,mdl=>s%mdl)
 
@@ -414,9 +415,15 @@ subroutine tree_in_peak(s,reset_tree_pos,count_tree)
              & + (p%vp(ipart,2) - c%peak_vel(peak_nr,2))**2 &
              & + (p%vp(ipart,3) - c%peak_vel(peak_nr,3))**2
         ! Compute relative distance
-        r2 =     (p%xp(ipart,1) - c%peak_com(peak_nr,1))**2 &
-             & + (p%xp(ipart,2) - c%peak_com(peak_nr,2))**2 &
-             & + (p%xp(ipart,3) - c%peak_com(peak_nr,3))**2
+        xpart(1:ndim)=p%xp(ipart,1:ndim)-c%peak_com(peak_nr,1:ndim)
+        r2=0d0
+        do idim=1,ndim
+           if(r%periodic(idim))then
+              if(xpart(idim)> r%box_size(idim)*0.5d0)xpart(idim)=xpart(idim)-r%box_size(idim)
+              if(xpart(idim)<-r%box_size(idim)*0.5d0)xpart(idim)=xpart(idim)+r%box_size(idim)
+           endif
+           r2=r2+xpart(idim)**2
+        end do
         ! Compute boundness criteria (a peak without particle mass binds nothing)
         bound = .false.
         if(c%particle_mass(peak_nr)>0d0)then
