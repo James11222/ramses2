@@ -89,6 +89,12 @@ contains
     type(ramses_t) :: sim
 
     integer :: ntestmax, nclumpmax
+    logical :: do_halo, do_profile
+
+    do_halo = (sim%r%clump_finder .and. sim%r%saddle_threshold > 0) .or. &
+         & (sim%r%sink_form .and. sim%r%sink_saddle_threshold > 0)
+    do_profile = (sim%r%clump_finder .and. sim%r%saddle_threshold > 0 .and. &
+         & sim%r%part .and. sim%r%rho_type_clump == 1)
 
     ntestmax = sim%m%ngridmax
     nclumpmax = sim%m%ngridmax/10
@@ -128,11 +134,17 @@ contains
     if (.not. allocated(peak_vel_d))       allocate(peak_vel_d(1:ndim, 1:nclumpmax))
     if (.not. allocated(peak_acc_d))       allocate(peak_acc_d(1:ndim, 1:nclumpmax))
     if (.not. allocated(peak_com_d))       allocate(peak_com_d(1:ndim, 1:nclumpmax))
-    if (.not. allocated(ind_halo_d))       allocate(ind_halo_d(1:nclumpmax))
-    if (.not. allocated(halo_mass_d))      allocate(halo_mass_d(1:nclumpmax))
-    if (.not. allocated(mass_bin_d))       allocate(mass_bin_d(1:nbin, 1:nclumpmax))
-    if (.not. allocated(phi_clump_d))      allocate(phi_clump_d(1:nbin, 1:nclumpmax))
-    if (.not. allocated(nsink_d))          allocate(nsink_d(1:nclumpmax))
+    if (do_halo) then
+       if (.not. allocated(ind_halo_d))    allocate(ind_halo_d(1:nclumpmax))
+       if (.not. allocated(halo_mass_d))   allocate(halo_mass_d(1:nclumpmax))
+    endif
+    if (do_profile) then
+       if (.not. allocated(mass_bin_d))    allocate(mass_bin_d(1:nbin, 1:nclumpmax))
+       if (.not. allocated(phi_clump_d))   allocate(phi_clump_d(1:nbin, 1:nclumpmax))
+    endif
+    if (sim%r%sink) then
+       if (.not. allocated(nsink_d))       allocate(nsink_d(1:nclumpmax))
+    endif
   end subroutine gpu_allocate_clump
 
   ! =========================================================================
@@ -202,7 +214,8 @@ contains
        deallocate(sim%c%peak_pos, sim%c%peak_vel, sim%c%peak_acc, sim%c%peak_com)
        deallocate(sim%c%min_dens, sim%c%n_cells, sim%c%clump_mass, sim%c%clump_vol, sim%c%clump_rad)
        deallocate(sim%c%npart, sim%c%particle_mass, sim%c%ind_final)
-       if (allocated(sim%c%ind_halo)) deallocate(sim%c%ind_halo, sim%c%halo_mass, sim%c%mass_bin, sim%c%phi)
+       if (allocated(sim%c%ind_halo)) deallocate(sim%c%ind_halo, sim%c%halo_mass)
+       if (allocated(sim%c%mass_bin)) deallocate(sim%c%mass_bin, sim%c%phi)
        if (allocated(sim%c%nsink)) deallocate(sim%c%nsink, sim%c%form_sink)
     endif
 
@@ -269,11 +282,13 @@ contains
     if (c%saddle_threshold > 0) then
        allocate(c%ind_halo(1:npeak));  c%ind_halo  = ind_halo_d(1:npeak)
        allocate(c%halo_mass(1:npeak)); c%halo_mass = halo_mass_d(1:npeak)
-       ! Device profiles are (nbin,npeak), host ones are (npeak,nbin)
-       allocate(tmp(1:nbin, 1:npeak))
-       allocate(c%mass_bin(1:npeak, 1:nbin)); tmp = mass_bin_d(:, 1:npeak);  c%mass_bin = transpose(tmp)
-       allocate(c%phi(1:npeak, 1:nbin));      tmp = phi_clump_d(:, 1:npeak); c%phi      = transpose(tmp)
-       deallocate(tmp)
+       if (allocated(mass_bin_d)) then
+          ! Device profiles are (nbin,npeak), host ones are (npeak,nbin)
+          allocate(tmp(1:nbin, 1:npeak))
+          allocate(c%mass_bin(1:npeak, 1:nbin)); tmp = mass_bin_d(:, 1:npeak);  c%mass_bin = transpose(tmp)
+          allocate(c%phi(1:npeak, 1:nbin));      tmp = phi_clump_d(:, 1:npeak); c%phi      = transpose(tmp)
+          deallocate(tmp)
+       endif
     endif
 
     ! Sink counts per peak
@@ -417,57 +432,88 @@ contains
   end subroutine gpu_smooth_rho
 
   ! =========================================================================
-  ! CUDA Kernel: Flag active cells above threshold
+  ! CUDA Kernel: Count active cells above threshold per oct
+  ! Requires blockDim%x == twotondim and blockDim%x*blockDim%y a multiple of 32
   ! =========================================================================
-  attributes(global) subroutine flag_test_cells_kernel(flag1, rho, grid, threshold, head_idx, num_octs)
-    integer, device :: flag1(1:twotondim, *)
+  attributes(global) subroutine flag_test_cells_kernel(prefix_sum, rho, grid, threshold, head_idx, num_octs)
+    integer, device :: prefix_sum(*)
     real(kind=dp), device :: rho(1:twotondim, *)
     type(oct), device :: grid(*)
     real(kind=dp), value :: threshold
     integer, value :: head_idx, num_octs
 
     integer :: cell_idx, oct_idx, block_idx
+    integer :: irank, offset, num
+    logical :: valid, ok
 
     block_idx = blockIdx%x - 1
     oct_idx = block_idx * blockDim%y + threadIdx%y - 1
-    if (oct_idx >= num_octs) return
-    oct_idx = head_idx + oct_idx
-
     cell_idx = threadIdx%x
 
-    if (.not. grid(oct_idx)%refined(cell_idx) .and. rho(cell_idx, oct_idx) > threshold) then
-       flag1(cell_idx, oct_idx) = 1
+    valid = (oct_idx < num_octs)
+    if (valid) then
+       oct_idx = head_idx + oct_idx
+       ok = .not. grid(oct_idx)%refined(cell_idx) .and. rho(cell_idx, oct_idx) > threshold
     else
-       flag1(cell_idx, oct_idx) = 0
+       ok = .false.
     endif
+
+    irank = merge(1, 0, ok)
+
+    ! Intra-oct inclusive scan across the 8 cells (all warp lanes active)
+    offset = 1
+    do while (offset < twotondim)
+       num = __shfl_up(irank, offset)
+       if (offset < cell_idx) irank = irank + num
+       offset = offset * 2
+    end do
+
+    if (valid .and. cell_idx == twotondim) prefix_sum(oct_idx) = irank
   end subroutine flag_test_cells_kernel
 
   ! =========================================================================
   ! CUDA Kernel: Scatter active test cells to compacted arrays
+  ! Requires blockDim%x == twotondim and blockDim%x*blockDim%y a multiple of 32
   ! =========================================================================
   attributes(global) subroutine scatter_test_cells_kernel(grid_d, cell_d, level_d, dens_d, &
-       & flag_scan, rho, grid, threshold, head_idx, num_octs)
+       & prefix_sum, rho, grid, threshold, head_idx, num_octs)
     integer, device :: grid_d(*), cell_d(*), level_d(*)
     real(kind=dp), device :: dens_d(*)
-    integer, device :: flag_scan(1:twotondim, *)
+    integer, device :: prefix_sum(*)
     real(kind=dp), device :: rho(1:twotondim, *)
     type(oct), device :: grid(*)
     real(kind=dp), value :: threshold
     integer, value :: head_idx, num_octs
 
-    integer :: cell_idx, oct_idx, block_idx, idx
+    integer :: cell_idx, oct_idx, block_idx, idx, base_idx
+    integer :: irank, offset, num
     logical :: ok
 
     block_idx = blockIdx%x - 1
     oct_idx = block_idx * blockDim%y + threadIdx%y - 1
-    if (oct_idx >= num_octs) return
-    oct_idx = head_idx + oct_idx
-
     cell_idx = threadIdx%x
 
-    ok = .not. grid(oct_idx)%refined(cell_idx) .and. rho(cell_idx, oct_idx) > threshold
+    if (oct_idx < num_octs) then
+       oct_idx = head_idx + oct_idx
+       ok = .not. grid(oct_idx)%refined(cell_idx) .and. rho(cell_idx, oct_idx) > threshold
+    else
+       ok = .false.
+    endif
+
+    irank = merge(1, 0, ok)
+
+    ! Intra-oct inclusive scan across the 8 cells (all warp lanes active)
+    offset = 1
+    do while (offset < twotondim)
+       num = __shfl_up(irank, offset)
+       if (offset < cell_idx) irank = irank + num
+       offset = offset * 2
+    end do
+
     if (ok) then
-       idx = flag_scan(cell_idx, oct_idx)
+       base_idx = 0
+       if (oct_idx > head_idx) base_idx = prefix_sum(oct_idx - 1)
+       idx = base_idx + irank
        grid_d(idx) = oct_idx
        cell_d(idx) = cell_idx
        level_d(idx) = grid(oct_idx)%lev
@@ -484,8 +530,7 @@ contains
     type(ramses_t) :: sim
     integer, intent(out) :: ntest
 
-    integer :: num_octs, head_idx, num_total_cells
-    integer(kind=8) :: num_total_cells8
+    integer :: num_octs, head_idx
     integer :: block_y, grid_x
     type(dim3) :: block_dim, grid_dim
     integer, device :: total_test_d
@@ -496,45 +541,30 @@ contains
     block_y = 16
     block_dim = dim3(twotondim, block_y, 1)
 
-    ! 1. Zero out flag1
-    flag1 = 0
-
-    ! 2. Flag active test cells in a single launch
     head_idx = 1
     num_octs = sim%m%ifree - 1
-    if (num_octs > 0) then
-       grid_x = (num_octs + block_y - 1) / block_y
-       grid_dim = dim3(grid_x, 1, 1)
-       call flag_test_cells_kernel<<<grid_dim, block_dim>>>(flag1, rho, grid, threshold, head_idx, num_octs)
-    endif
-
-    ! 3. Compute inclusive prefix scan on flag1
-    if (num_octs > 0) then
-       num_total_cells8 = int(sim%m%ifree - 1, kind=8) * twotondim
-       if (num_total_cells8 > huge(1_4)) then
-          write(*,*) 'gpu_collect_test: cell count exceeds 32-bit gpu_scan limit'
-          stop
-       endif
-       num_total_cells = int(num_total_cells8, kind=4)
-       call gpu_scan(flag1, 1, num_total_cells, total_test_d)
-       ntest = total_test_d
-       if (ntest > size(grid_d)) then
-          write(*,*) 'gpu_collect_test: ntest (', ntest, ') exceeds preallocated size (', size(grid_d), ')'
-          stop
-       endif
-    else
+    if (num_octs <= 0) then
        ntest = 0
+       return
     endif
 
+    ! 1. Count active test cells per oct into prefix_sum(1:num_octs)
+    grid_x = (num_octs + block_y - 1) / block_y
+    grid_dim = dim3(grid_x, 1, 1)
+    call flag_test_cells_kernel<<<grid_dim, block_dim>>>(prefix_sum, rho, grid, threshold, head_idx, num_octs)
+
+    ! 2. Compute inclusive prefix scan over octs
+    call gpu_scan(prefix_sum, 1, num_octs, total_test_d)
+    ntest = total_test_d
+    if (ntest > size(grid_d)) then
+       write(*,*) 'gpu_collect_test: ntest (', ntest, ') exceeds preallocated size (', size(grid_d), ')'
+       stop
+    endif
     if (ntest == 0) return
 
-    ! 4. Scatter to compacted arrays in a single launch
-    if (num_octs > 0) then
-       grid_x = (num_octs + block_y - 1) / block_y
-       grid_dim = dim3(grid_x, 1, 1)
-       call scatter_test_cells_kernel<<<grid_dim, block_dim>>>(grid_d, cell_d, level_d, dens_d, &
-            & flag1, rho, grid, threshold, head_idx, num_octs)
-    endif
+    ! 3. Scatter to compacted arrays in a single launch
+    call scatter_test_cells_kernel<<<grid_dim, block_dim>>>(grid_d, cell_d, level_d, dens_d, &
+         & prefix_sum, rho, grid, threshold, head_idx, num_octs)
   end subroutine gpu_collect_test
 
   ! =========================================================================
@@ -588,7 +618,7 @@ contains
     integer, value :: hash_size, ntest
     integer, value :: ngridmax
 
-    integer :: itest, tid, lane, cblk, offset
+    integer :: itest, lane, cblk, offset
     integer :: ilevel, igrid, ind, igridn, icelln
     integer :: idim
     real(kind=8) :: xcen(3), xnei(3)
@@ -600,11 +630,10 @@ contains
     real(kind=dp), shared :: s_dens(0:63, 0:3)
     integer, shared :: s_lane(0:63, 0:3), s_grid(0:63, 0:3), s_cell(0:63, 0:3)
 
-    ! One thread per neighbor: 56 lanes per test cell
-    tid = (blockIdx%x - 1) * blockDim%x + threadIdx%x - 1
-    itest = tid / 56 + 1
-    lane = mod(tid, 56)
+    ! One thread per neighbor: 56 lanes per test cell, 4 cells per block
     cblk = (threadIdx%x - 1) / 56
+    lane = mod(threadIdx%x - 1, 56)
+    itest = (blockIdx%x - 1) * 4 + cblk + 1
 
     igridn = 0
     icelln = 0
@@ -949,7 +978,7 @@ contains
     integer(kind=4), device :: hash_val(*)
     integer, value :: hash_size, ntest, ngridmax, npass
 
-    integer :: itest, tid, lane, cblk, offset
+    integer :: itest, lane, cblk, offset
     integer :: ilevel, igrid, ind, igridn, icelln
     integer :: idim
     real(kind=8) :: xcen(3), xnei(3)
@@ -962,11 +991,10 @@ contains
     ! Per-cell max reduction: 56 lanes padded to 64 slots, 4 cells per block
     real(kind=dp), shared :: s_dens(0:63, 0:3)
 
-    ! One thread per neighbor: 56 lanes per test cell
-    tid = (blockIdx%x - 1) * blockDim%x + threadIdx%x - 1
-    itest = tid / 56 + 1
-    lane = mod(tid, 56)
+    ! One thread per neighbor: 56 lanes per test cell, 4 cells per block
     cblk = (threadIdx%x - 1) / 56
+    lane = mod(threadIdx%x - 1, 56)
+    itest = (blockIdx%x - 1) * 4 + cblk + 1
 
     dens_cand = -huge(0.0_dp)
 
@@ -2392,8 +2420,13 @@ contains
          & npart_d, mass_threshold, relevance_threshold, part_clump, sim%c%npeak)
 
     ! 2. Change other important peak indices
-    call remap_peak_index_kernel<<<grid_size_peaks, block_size>>>(new_peak_d, ind_halo_d, ind_final_d, &
-         & do_halo, sim%c%npeak)
+    if (do_halo) then
+       call remap_peak_index_kernel<<<grid_size_peaks, block_size>>>(new_peak_d, ind_halo_d, ind_final_d, &
+            & .true., sim%c%npeak)
+    else
+       call remap_peak_index_kernel<<<grid_size_peaks, block_size>>>(new_peak_d, new_peak_d, ind_final_d, &
+            & .false., sim%c%npeak)
+    endif
 
     ! 3. Modify particle peak ids accordingly
     if (sim%r%part .and. sim%p%npart > 0) then

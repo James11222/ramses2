@@ -15,6 +15,7 @@ contains
   include 'gpu_rand.cuf'
 
 !> Count new stars per cell.
+!> Requires blockDim%x to be a multiple of 32 (8 consecutive threads per oct).
 ! =========================================================================
 attributes(global) subroutine count_site_kernel(grid, uold, bold, flag1, prefix_sum, &
      & head_idx, num_octs, ilevel, d0, dx, vol, factG, mstar, ivar_refine, var_cut_refine, &
@@ -37,31 +38,35 @@ attributes(global) subroutine count_site_kernel(grid, uold, bold, flag1, prefix_
   logical, intent(in), value :: sgs_turb
   integer(kind=4), intent(in), value :: iturb
 
-  integer :: gid, oct_idx, cell_idx, nstar, global_cell_idx, idim
+  integer :: oct_idx, cell_idx, nstar, idim, irank, tmp, offset
   integer(kind=8) :: hkey, counter
   real(kind=dp) :: d, mask, p, cs2, sigma2, t_ff, sfr_ff, t_dyn
   real(kind=8) :: alpha_vir, Mach2, b_turb, sigs, scrit, ekin, emag
   real(kind=8) :: mcell, mgas, PoissMean
   type(curandStatePhilox4_32_10) :: localstate
-  logical :: ok
+  logical :: ok, valid
 
-  gid = (blockIdx%x - 1) * blockDim%x + threadIdx%x - 1
-  if (gid >= num_octs * twotondim) return
+  oct_idx = (blockIdx%x - 1) * (blockDim%x / twotondim) + (threadIdx%x - 1) / twotondim
+  cell_idx = mod(threadIdx%x - 1, twotondim) + 1
+  valid = (oct_idx < num_octs)
 
-  oct_idx = head_idx + gid / twotondim
-  cell_idx = mod(gid, twotondim) + 1
+  if (valid) then
+     oct_idx = head_idx + oct_idx
 
-  ! Leaf cell check
-  ok = .not. grid(oct_idx)%refined(cell_idx)
+     ! Leaf cell check
+     ok = .not. grid(oct_idx)%refined(cell_idx)
 
-  ! Density threshold
-  d = uold(cell_idx, 1, oct_idx)
-  ok = ok .and. (d > d0)
+     ! Density threshold
+     d = uold(cell_idx, 1, oct_idx)
+     ok = ok .and. (d > d0)
 
-  ! Zoom mask
-  if (ivar_refine > 0) then
-     mask = uold(cell_idx, ivar_refine, oct_idx) / d
-     ok = ok .and. (mask > var_cut_refine)
+     ! Zoom mask
+     if (ivar_refine > 0) then
+        mask = uold(cell_idx, ivar_refine, oct_idx) / d
+        ok = ok .and. (mask > var_cut_refine)
+     endif
+  else
+     ok = .false.
   endif
 
   nstar = 0
@@ -124,15 +129,18 @@ attributes(global) subroutine count_site_kernel(grid, uold, bold, flag1, prefix_
   endif
 
   ! Store nstar in flag1 array
-  flag1(cell_idx, oct_idx) = nstar
+  if (valid) flag1(cell_idx, oct_idx) = nstar
 
-  ! Count numbr of SF sites in prefix_sum array
-  global_cell_idx = cell_idx + (oct_idx - 1) * twotondim
-  if (nstar > 0) then
-     prefix_sum(global_cell_idx) = 1
-  else
-     prefix_sum(global_cell_idx) = 0
-  endif
+  ! Intra-oct inclusive scan of SF sites across the 8 cells
+  irank = merge(1, 0, nstar > 0)
+  offset = 1
+  do while (offset < twotondim)
+     tmp = __shfl_up(irank, offset)
+     if (cell_idx > offset) irank = irank + tmp
+     offset = offset * 2
+  end do
+
+  if (valid .and. cell_idx == twotondim) prefix_sum(oct_idx) = irank
 
 end subroutine count_site_kernel
 ! =========================================================================
@@ -156,7 +164,7 @@ attributes(global) subroutine count_star_kernel(flag1, head_idx, num_octs, nflag
   bid = blockIdx%x - 1
 
   ! Compute oct idx
-  oct_idx = ( tid + bid * blockDim%x ) / twotondim
+  oct_idx = bid * (blockDim%x / twotondim) + tid / twotondim
 
   ! If not in block
   if (oct_idx >= num_octs) then
@@ -185,47 +193,55 @@ end subroutine count_star_kernel
 ! =========================================================================
 
 !> Compute cell index spawning new stars
+!> Requires blockDim%x to be a multiple of 32 (8 consecutive threads per oct).
 ! =========================================================================
-attributes(global) subroutine compute_star_swap_table(swap_local, prefix_sum, head_idx, num_octs)
+attributes(global) subroutine compute_star_swap_table(swap_local, swap_global, flag1, prefix_sum, head_idx, num_octs)
   integer(kind=4), device :: swap_local(*)
+  integer(kind=4), device :: swap_global(*)
+  integer(kind=4), device :: flag1(1:twotondim,*)
   integer(kind=4), device :: prefix_sum(*)
 
   integer(kind=4), intent(in), value :: head_idx
   integer(kind=4), intent(in), value :: num_octs
 
   integer :: oct_idx, cell_idx, thread_idx, block_idx, star_idx
-  integer :: gid, global_cell_idx
-  integer :: previous_sum, nstar
+  integer :: previous_sum, nstar, irank, tmp, offset
+  logical :: valid
 
   ! Compute thread and block idx
   thread_idx = threadIdx%x - 1
   block_idx = blockIdx%x - 1
 
   ! Compute oct and cell idx
-  gid = block_idx * blockDim%x + thread_idx
-  oct_idx = gid / twotondim
-  if (oct_idx >= num_octs) return
+  oct_idx = block_idx * (blockDim%x / twotondim) + thread_idx / twotondim
+  cell_idx = mod(thread_idx, twotondim) + 1
+  valid = (oct_idx < num_octs)
 
-  oct_idx = head_idx + oct_idx
-  cell_idx = mod(gid, twotondim) + 1
-
-  ! Compute global cell idx
-  global_cell_idx = cell_idx + (oct_idx - 1) * twotondim
-
-  ! Get previous prefix sum
-  if (global_cell_idx > 1 + (head_idx - 1) * twotondim)then
-     previous_sum = prefix_sum(global_cell_idx - 1)
-  else
-     previous_sum = 0
+  nstar = 0
+  if (valid) then
+     oct_idx = head_idx + oct_idx
+     nstar = flag1(cell_idx, oct_idx)
   endif
 
-  ! Compute original value (0 or 1)
-  nstar = prefix_sum(global_cell_idx) - previous_sum
+  ! Intra-oct inclusive scan across the 8 cells
+  irank = merge(1, 0, nstar > 0)
+  offset = 1
+  do while (offset < twotondim)
+     tmp = __shfl_up(irank, offset)
+     if (cell_idx > offset) irank = irank + tmp
+     offset = offset * 2
+  end do
 
-  ! Compute new star index and corresponding cell idx
-  if(nstar > 0)then
-     star_idx = 1 + previous_sum
-     swap_local(star_idx) = global_cell_idx
+  ! Compute new star index and corresponding oct and cell idx
+  if (valid .and. nstar > 0) then
+     if (oct_idx > head_idx) then
+        previous_sum = prefix_sum(oct_idx - 1)
+     else
+        previous_sum = 0
+     endif
+     star_idx = previous_sum + irank
+     swap_local(star_idx) = oct_idx
+     swap_global(star_idx) = cell_idx
   endif
 
 end subroutine compute_star_swap_table
@@ -233,7 +249,7 @@ end subroutine compute_star_swap_table
 
 !> Create star particles and update gas variables.
 ! =========================================================================
-attributes(global) subroutine star_formation_kernel(grid, uold, f, flag1, swap_local, &
+attributes(global) subroutine star_formation_kernel(grid, uold, f, flag1, swap_local, swap_global, &
      & star_xp, star_vp, star_mp, star_tp, star_zp, star_levelp, star_idp, &
      & head_idx, num_star, ilevel, levelmin, levelmax, dx, vol, mstar, d_skip, leading, &
      & dt, texp, aexp, metal, imetal, z_ave, ientropy, dual_energy)
@@ -243,6 +259,7 @@ attributes(global) subroutine star_formation_kernel(grid, uold, f, flag1, swap_l
   real(kind=dp), device :: f(1:twotondim,1:ndim,*)
   integer(kind=4), device :: flag1(1:twotondim,*)
   integer(kind=4), device :: swap_local(*)
+  integer(kind=4), device :: swap_global(*)
   real(kind=dp), device :: star_xp(*), star_vp(*)
   real(kind=dp), device :: star_mp(*), star_tp(*), star_zp(*)
   integer(kind=4), device :: star_levelp(*)
@@ -258,18 +275,16 @@ attributes(global) subroutine star_formation_kernel(grid, uold, f, flag1, swap_l
   integer(kind=4), intent(in), value :: ientropy, imetal
   real(kind=8), intent(in), value :: dual_energy
 
-  integer :: star_idx, global_cell_idx, cell_idx, oct_idx, idim, ivar, nstar
+  integer :: star_idx, cell_idx, oct_idx, idim, ivar, nstar
   integer(kind=8) :: hkey, counter
   real(kind=dp) :: d_old, d_new, d_star, xrand
   type(curandStatePhilox4_32_10) :: localstate
 
   star_idx = (blockIdx%x - 1) * blockDim%x + threadIdx%x - 1
   if (star_idx >= num_star) return
-  global_cell_idx = swap_local(1 + star_idx)
+  oct_idx = swap_local(1 + star_idx)
+  cell_idx = swap_global(1 + star_idx)
   star_idx = head_idx + star_idx
-
-  oct_idx = (global_cell_idx - 1) / twotondim + 1
-  cell_idx = global_cell_idx - (oct_idx -1) * twotondim
 
   ! Coordinates
   do idim = 1, ndim

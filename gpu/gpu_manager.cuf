@@ -325,17 +325,7 @@ subroutine gpu_allocate_amr(sim)
   ! Work buffers for GPU scan/sort/refine
   allocate(swap_local(1:sim%m%ngridmax+sim%m%ncachemax))
   allocate(swap_global(1:sim%m%ngridmax+sim%m%ncachemax))
-  if (sim%r%clump_finder .or. sim%r%sink_form .or. sim%r%star) then
-     ! Cell-based scans are limited to 32-bit indices in gpu_scan
-     if (sim%m%ngridmax + sim%m%ncachemax > huge(1_4) / twotondim) then
-        write(*,*)'gpu_allocate_amr: ngridmax+ncachemax too large for 32-bit cell-based gpu_scan'
-        write(*,*)'Maximum allowed value is ',huge(1_4) / twotondim
-        stop
-     endif
-     scan_size = (sim%m%ngridmax + sim%m%ncachemax) * twotondim
-  else
-     scan_size = sim%m%ngridmax + sim%m%ncachemax
-  endif
+  scan_size = sim%m%ngridmax + sim%m%ncachemax
   call ensure_scan_capacity(scan_size, 0)
   swap_local=0
   swap_global=0
