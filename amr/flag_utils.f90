@@ -429,6 +429,9 @@ subroutine user_flag(s,ilevel,nflag)
 
   ! Refinement rules around sink particles
   if(s%r%sink.and.s%r%sink_refine)call sink_flag(s,s%sink,ilevel)
+#ifdef CORE
+  if(s%r%core.and.s%r%core_refine)call sink_flag(s,s%core,ilevel)
+#endif
 
   nflag=s%g%nflag
 
@@ -573,6 +576,9 @@ subroutine sink_flag(s,p,ilevel)
   use amr_parameters, only: ndim, twotondim
   use ramses_commons, only: ramses_t
   use pm_commons, only: part_t
+#ifdef CORE
+  use pm_parameters, only: CORE_TYPE
+#endif
   use nbors_utils
   use cache_commons
   use cache
@@ -604,7 +610,15 @@ subroutine sink_flag(s,p,ilevel)
   vol_loc=dx_loc**ndim
 
   ! Compute number of cells within sink sphere
+#ifdef CORE
+  if(p%type.eq.CORE_TYPE)then
+     nrad = r%core_b_spline_order
+  else
+     nrad = r%sink_b_spline_order
+  endif
+#else
   nrad = r%sink_b_spline_order
+#endif
   rrad = dble(nrad)
   n_nei = 0
   do k = -nrad, nrad

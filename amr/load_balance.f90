@@ -841,6 +841,11 @@ recursive subroutine r_balance_part(pst,ilevel,input_size,output_array,output_si
      if(pst%s%r%sink)then
         call balance_part(pst%s,pst%s%sink,ilevel)
      endif
+#ifdef CORE
+     if(pst%s%r%core)then
+        call balance_part(pst%s,pst%s%core,ilevel)
+     endif
+#endif
      if(pst%s%r%tree)then
         call balance_part(pst%s,pst%s%tree,ilevel)
      endif

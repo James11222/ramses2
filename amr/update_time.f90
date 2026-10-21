@@ -120,7 +120,11 @@ subroutine m_update_time(pst,ilevel,done)
            write(*,777)g%nstep_coarse,mcons,econs,g%epot_tot,g%ekin_tot
         end if
         if(r%star)write(*,'(" Total mass in stars=",1PE14.7)')g%mass_star_tot
+#ifdef CORE
+        if(r%sink.or.r%core)write(*,'(" Total mass in sinks=",1PE14.7)')g%mass_sink_tot
+#else
         if(r%sink)write(*,'(" Total mass in sinks=",1PE14.7)')g%mass_sink_tot
+#endif
 777     format(' Main step= ',i0,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2)
 778     format(' Main step= ',i0,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2,' eint=',1pe9.2)
 779     format(' Main step= ',i0,' mcons=',1pe9.2,' econs=',1pe9.2,' epot=',1pe9.2,' ekin=',1pe9.2,' eint=',1pe9.2,' emag=',1pe9.2)

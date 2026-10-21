@@ -16,6 +16,10 @@ subroutine adaptive_loop(pst)
   use init_refine_ramses_module, only: m_init_refine_ramses
   use turb_init_module, only: r_init_turb
   use amr_step, only: m_amr_step
+#ifdef CORE
+  use core_step_module, only: core_step_state_t,m_core_step, &
+       CORE_PHASE_HISTORY_LOAD
+#endif
   use update_time_module, only: getmem, writemem, r_hash_stats
   use load_balance_module, only: r_balance_part
   use clump_finder_module, only: m_clump_finder
@@ -30,6 +34,9 @@ subroutine adaptive_loop(pst)
 
   implicit none
   type(pst_t)::pst
+#ifdef CORE
+  type(core_step_state_t)::core_state
+#endif
   logical::done
 
   ! Local variables
@@ -75,6 +82,10 @@ subroutine adaptive_loop(pst)
 
   ! Read initial particle properties from files
   if(r%pic)call m_input_part(pst)
+
+#ifdef CORE
+  call m_core_step(pst,core_state,CORE_PHASE_HISTORY_LOAD)
+#endif
 
   ! Build initial AMR grid
   if(r%nrestart==0)then
