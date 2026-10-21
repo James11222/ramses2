@@ -15,6 +15,9 @@ subroutine m_input_part_restart(pst)
   use ramses_commons, only: pst_t
   use output_amr_module, only: input_header
   use pm_parameters, only: PART_TYPE, STAR_TYPE, SINK_TYPE, TREE_TYPE
+#ifdef CORE
+  use pm_parameters, only: CORE_TYPE
+#endif
   implicit none
   type(pst_t)::pst
   !--------------------------------------------------------------------
@@ -143,6 +146,46 @@ subroutine m_input_part_restart(pst)
 
   endif
 
+#ifdef CORE
+  if(pst%s%r%core)then
+
+     ! Read core particle files header
+     call title(pst%s%r%nrestart,nchar)
+     file_head='backup_'//TRIM(nchar)//'/core_header.txt'
+     call input_header(pst%s%r,pst%s%g,file_head,npart_tot_file,ncpu_file)
+     write(*,'(" Restart snapshot has ",I12," core particles")')npart_tot_file
+
+     ! Allocate local array
+     allocate(npart_file(0:ncpu_file))
+
+     ! Read number of particles in each file
+     npart_tot_check=0
+     npart_file(0)=CORE_TYPE
+     do icpu=1,ncpu_file
+        call title(icpu,ncharcpu)
+        file_part='backup_'//TRIM(nchar)//'/core.'//TRIM(ncharcpu)
+        ilun=10
+        open(unit=ilun,file=TRIM(file_part),access="stream",action="read",form='unformatted')
+        read(ilun,POS=5)npart_file(icpu)
+        npart_tot_check=npart_tot_check+npart_file(icpu)
+        close(ilun)
+     end do
+     if(npart_tot_check.NE.npart_tot_file)then
+        write(*,*)' Input file corrupted'
+        call mdl_abort(pst%s%mdl)
+     endif
+
+     ! Call recursive slave routine
+     call r_input_part_restart(pst,npart_file,ncpu_file+1,output,2)
+     write(*,*)'Total mass in cores=',output%mass
+     pst%s%g%mass_sink_tot=pst%s%g%mass_sink_tot+output%mass
+
+     ! Deallocate local array
+     deallocate(npart_file)
+
+  endif
+#endif
+
   if(pst%s%r%tree)then
 
      ! Read star particle files header
@@ -188,6 +231,9 @@ recursive subroutine r_input_part_restart(pst,input_array,input_size,output,outp
   use mdl_module
   use ramses_commons, only: pst_t
   use pm_parameters, only: PART_TYPE, STAR_TYPE, SINK_TYPE, TREE_TYPE
+#ifdef CORE
+  use pm_parameters, only: CORE_TYPE
+#endif
   use mdl_parameters
   implicit none
   type(pst_t)::pst
@@ -220,6 +266,11 @@ recursive subroutine r_input_part_restart(pst,input_array,input_size,output,outp
      if(p_type==SINK_TYPE)then
         call input_part_restart(pst%s%r,pst%s%g,pst%s%sink,input_size-1,input_array(2:input_size),output%mass)
      endif
+#ifdef CORE
+     if(p_type==CORE_TYPE)then
+        call input_part_restart(pst%s%r,pst%s%g,pst%s%core,input_size-1,input_array(2:input_size),output%mass)
+     endif
+#endif
      if(p_type==TREE_TYPE)then
         call input_part_restart(pst%s%r,pst%s%g,pst%s%tree,input_size-1,input_array(2:input_size),output%mass)
      endif
@@ -234,6 +285,9 @@ subroutine input_part_restart(r,g,p,ncpu_file,npart_file,mpart_loc)
   use amr_parameters, only: ndim, dp, i8b, flen
   use amr_commons, only: run_t, global_t
   use pm_parameters, only: PART_TYPE, STAR_TYPE, SINK_TYPE, TREE_TYPE
+#ifdef CORE
+  use pm_parameters, only: CORE_TYPE
+#endif
   use pm_commons, only: part_t
   implicit none
   type(run_t)::r
@@ -307,6 +361,9 @@ subroutine input_part_restart(r,g,p,ncpu_file,npart_file,mpart_loc)
   if(p%type==PART_TYPE)prefix='part'
   if(p%type==STAR_TYPE)prefix='star'
   if(p%type==SINK_TYPE)prefix='sink'
+#ifdef CORE
+  if(p%type==CORE_TYPE)prefix='core'
+#endif
   if(p%type==TREE_TYPE)prefix='tree'
 
   ! Loop over relevant files
@@ -430,6 +487,20 @@ subroutine input_part_restart(r,g,p,ncpu_file,npart_file,mpart_loc)
         end do
         iskip=iskip+nbyte*int(npart_file(icpu),8)
      endif
+
+#ifdef CORE
+     ! Read specific internal energy
+     if(allocated(p%up))then
+        ipos=iskip+nbyte*int(istart-1,8)
+        read(10,POS=ipos)xdp
+        ipart=ipart_old
+        do i=istart,iend
+           ipart=ipart+1
+           p%up(ipart)=xdp(i)
+        end do
+        iskip=iskip+nbyte*int(npart_file(icpu),8)
+     endif
+#endif
 
      ! Read size
      if(allocated(p%size))then
