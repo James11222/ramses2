@@ -1,5 +1,6 @@
 module clfind_commons
     use hash
+    use amr_parameters, only: i8b
 
     type clump_t
 
@@ -65,7 +66,7 @@ module clfind_commons
 
        integer,allocatable,dimension(:) :: ntree ! Number of merger tree paeticles per clump
        integer,allocatable,dimension(:) :: form_tree ! Does peak form a new tree particle?
-       integer,allocatable,dimension(:) :: min_tree_id ! Minimum tree id in clump
+       integer(i8b),allocatable,dimension(:) :: min_tree_id ! Minimum tree id in clump
 
        integer,allocatable,dimension(:) :: nsink ! Number of sinks per clump
 #ifdef CORE

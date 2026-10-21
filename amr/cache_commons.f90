@@ -1,5 +1,5 @@
 module cache_commons
-  use amr_parameters, only: ndim, twotondim, nbin
+  use amr_parameters, only: ndim, twotondim, nbin, i8b
   use hydro_parameters, only: nvar
   use rt_parameters, only: nrtvar, nrtgrp
   use cr_parameters, only: ncruvar
@@ -157,7 +157,7 @@ module cache_commons
      real(kind=8),dimension(1:ndim)::acc
   end type msg_sink_clump
   type msg_tree_clump
-     integer::id
+     integer(i8b)::id
      integer::lev
      real(kind=8)::rad
      real(kind=8)::mass
@@ -166,7 +166,7 @@ module cache_commons
      real(kind=8),dimension(1:ndim)::acc
   end type msg_tree_clump
   type msg_tree_minid
-     integer::id
+     integer(i8b)::id
      integer(kind=8)::ind
      real(kind=8)::mass
   end type msg_tree_minid

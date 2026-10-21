@@ -1381,6 +1381,15 @@ subroutine m_read_params(pst)
      endif
   endif
 
+  ! Merger tree particles only form in dark matter clumps
+  if(merger_tree)then
+     if(rho_type_clump/=1.or..not.part)then
+        write(*,*)'Error: merger_tree=.true. needs dark matter particles (pic=.true., npartmax>0) and rho_type_clump = 1 (DM)'
+        write(*,*)'Currently rho_type_clump=',rho_type_clump
+        nml_ok=.false.
+     endif
+  endif
+
 #ifdef _CUDA
   ! The GPU sink evolution does not provide the high frequency sink dump
   if(sink.and.sink_delta_tout>0)then

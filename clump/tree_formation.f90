@@ -350,6 +350,7 @@ end subroutine tree_clump
 !##############################################################################
 !##############################################################################
 subroutine tree_in_peak(s,reset_tree_pos,count_tree)
+  use amr_parameters, only: i8b
   use ramses_commons, only: ramses_t
   use clump_merger_module
   use cache_commons, only: msg_tree_clump,msg_tree_minid
@@ -386,7 +387,7 @@ subroutine tree_in_peak(s,reset_tree_pos,count_tree)
   ! Reset tree particle positions to peak position
   !-----------------------------------------------
   if(reset_tree_pos)then
-     c%min_tree_id=huge(0)
+     c%min_tree_id=huge(0_i8b)
      call open_cache_clump(mdl, c, pack_size=storage_size(dummy_tree_clump)/32, &
           pack=pack_fetch_tree, unpack=unpack_fetch_tree, &
           init=init_flush_minid, flush=pack_flush_minid, combine=unpack_flush_minid)
@@ -396,7 +397,6 @@ subroutine tree_in_peak(s,reset_tree_pos,count_tree)
         call get_peak(s,global_peak_id,peak_nr,fetch_cache=.true.,flush_cache=.true.)
         ! Compute peak's central core properties
         radius = 2d0*r%boxlen/2**c%peak_level(peak_nr)
-        vel2 = grav*c%particle_mass(peak_nr)/radius
         rad2 = radius**2
         ! Compute relative velocity
         v2 =     (p%vp(ipart,1) - c%peak_vel(peak_nr,1))**2 &
@@ -406,9 +406,12 @@ subroutine tree_in_peak(s,reset_tree_pos,count_tree)
         r2 =     (p%xp(ipart,1) - c%peak_com(peak_nr,1))**2 &
              & + (p%xp(ipart,2) - c%peak_com(peak_nr,2))**2 &
              & + (p%xp(ipart,3) - c%peak_com(peak_nr,3))**2
-        ! Compute boundness criteria
-!        bound = ( v2/vel2 + r2/rad2 < 15d0 )
-        bound = ( v2/vel2 + 2d0*sqrt(r2/rad2) < 20d0 )
+        ! Compute boundness criteria (a peak without particle mass binds nothing)
+        bound = .false.
+        if(c%particle_mass(peak_nr)>0d0)then
+           vel2 = grav*c%particle_mass(peak_nr)/radius
+           bound = ( v2/vel2 + 2d0*sqrt(r2/rad2) < 20d0 )
+        endif
 
         if(bound)then
            ! If not merged yet then mark as merger candidate
@@ -645,11 +648,12 @@ end subroutine unpack_fetch_minid
 !################################################################
 !################################################################
 subroutine init_flush_minid(c,local_peak_id)
+  use amr_parameters, only: i8b
   use clfind_commons, only: clump_t
   type(clump_t)::c
   integer::local_peak_id
 
-  c%min_tree_id(local_peak_id)=huge(0)
+  c%min_tree_id(local_peak_id)=huge(0_i8b)
 
 end subroutine init_flush_minid
 !################################################################
