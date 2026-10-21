@@ -10,7 +10,8 @@ module clump_device
        sink_xp, sink_levelp, sink_pid, sink_vp, sink_fp, sink_mp, sink_tp, sink_idp, swap_local, &
        prefix_sum, box_size, xp, vp, mp, star_xp, star_vp, star_mp, &
        sink_jp, sink_tm, sink_idm, pid, hid, star_pid, star_hid, sink_hid
-  use gpu_runner, only: tree_xp, tree_vp, tree_tm, tree_idp, tree_idm, tree_idt, tree_pid
+  use gpu_runner, only: tree_xp, tree_vp, tree_mp, tree_tp, tree_tm, tree_levelp, &
+       tree_idp, tree_idm, tree_idt, tree_pid
   use part_device, only: dtnew_part_d
   implicit none
 
@@ -3393,5 +3394,170 @@ contains
        write(*,'(" Formed",I11,"  new sinks for a total of ",I0)')npart_new,int(sim%sink%npart_tot,kind=4)
     endif
   end subroutine gpu_sink_formation
+
+  ! =========================================================================
+  ! CUDA Kernel: Evaluate tree formation sites on the GPU
+  ! =========================================================================
+  attributes(global) subroutine count_tree_site_kernel( &
+       & npeak, relevance_threshold, mass_threshold, saddle_threshold, &
+       & purity_threshold, mp_min, prefix_sum)
+    integer, value :: npeak
+    real(kind=dp), value :: relevance_threshold, mass_threshold, saddle_threshold
+    real(kind=dp), value :: purity_threshold, mp_min
+    integer(kind=4), device :: prefix_sum(*)
+
+    integer :: gid, tid, jpeak
+    real(kind=dp) :: purity
+    logical :: ok
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npeak) return
+
+    jpeak = gid
+    ok = .true.
+
+    ! 1. Peak must be its own halo, with enough mass
+    if (saddle_threshold > 0.0_dp) then
+       if (ind_halo_d(jpeak) /= jpeak) ok = .false.
+       if (halo_mass_d(jpeak) <= 10.0_dp * mass_threshold) ok = .false.
+    else
+       if (clump_mass_d(jpeak) <= 10.0_dp * mass_threshold) ok = .false.
+    endif
+    ! 2. Relevance threshold check
+    if (relevance_d(jpeak) <= relevance_threshold) ok = .false.
+    ! 3. Peak must contain dark matter particles
+    if (npart_d(jpeak) == 0) ok = .false.
+    ! 4. Ensure no existing trees in the peak (or halo)
+    if (ntree_d(jpeak) > 0) ok = .false.
+    ! 5. Dark matter purity check
+    if (particle_mass_d(jpeak) > 0.0_dp) then
+       purity = npart_d(jpeak) * mp_min / particle_mass_d(jpeak)
+       if (purity <= purity_threshold) ok = .false.
+    endif
+
+    if (ok) then
+       prefix_sum(jpeak) = 1
+    else
+       prefix_sum(jpeak) = 0
+    endif
+  end subroutine count_tree_site_kernel
+
+  ! =========================================================================
+  ! CUDA Kernel: Spawn tree particles on the GPU
+  ! =========================================================================
+  attributes(global) subroutine tree_formation_kernel( &
+       & swap_local, head_part, npart_new, npart_tot_old, texp)
+    integer(kind=4), device :: swap_local(*)
+    integer, value :: head_part, npart_new
+    integer(kind=8), value :: npart_tot_old
+    real(kind=dp), value :: texp
+
+    integer :: tree_idx, gid, tid, jpeak, ilevel, idim
+
+    tid = threadIdx%x
+    gid = tid + (blockIdx%x - 1) * blockDim%x
+    if (gid > npart_new) return
+
+    jpeak = swap_local(gid)
+    tree_idx = head_part + gid - 1
+    ilevel = peak_level_d(jpeak)
+
+    do idim = 1, ndim
+       ! Compute tree particle position from peak position
+       tree_xp(tree_idx, idim) = peak_com_d(idim, jpeak)
+       ! Compute tree particle velocity from peak velocity
+       tree_vp(tree_idx, idim) = peak_vel_d(idim, jpeak) - peak_acc_d(idim, jpeak) * 0.5_dp * dtnew_dp_d(ilevel)
+    end do
+    ! Set mass to zero
+    tree_mp(tree_idx) = 0.0_dp
+    ! Set tracking number to parent clump id
+    tree_idt(tree_idx) = jpeak
+    ! Compute tree particle birth time
+    tree_tp(tree_idx) = texp
+    ! Set merging time to -1000
+    tree_tm(tree_idx) = -1000.0_dp
+    ! Set merging id to 0
+    tree_idm(tree_idx) = 0
+    ! Compute level
+    tree_levelp(tree_idx) = ilevel
+    ! New tree particle index
+    tree_idp(tree_idx) = int(npart_tot_old + gid, kind=i8b)
+  end subroutine tree_formation_kernel
+
+  ! =========================================================================
+  ! Host Driver: Create new tree particles in the GPU clumps
+  ! =========================================================================
+  subroutine gpu_tree_formation(sim)
+    use nvtx
+    use ramses_commons, only: ramses_t
+    type(ramses_t), intent(inout) :: sim
+
+    integer :: num_threads, num_blocks
+    integer :: npart_new
+    integer(kind=4), device :: npart_new_d
+    integer :: head_part
+    real(kind=dp), dimension(1:MAXLEVEL) :: dtnew_dp
+
+#if NDIM>2
+    npart_new = 0
+    if (sim%c%npeak > 0) then
+
+       num_threads = 256
+       num_blocks = (sim%c%npeak + num_threads - 1) / num_threads
+
+       ! 1. Evaluate formation sites on GPU
+       call nvtxStartRange("Count Tree Formation Sites", color=5)!red
+       call count_tree_site_kernel<<<num_blocks, num_threads>>>( &
+            & sim%c%npeak, &
+            & real(sim%c%relevance_threshold, kind=dp), real(sim%c%mass_threshold, kind=dp), &
+            & real(sim%c%saddle_threshold, kind=dp), real(sim%c%purity_threshold, kind=dp), &
+            & real(sim%g%mp_min, kind=dp), prefix_sum)
+       call GPU_Error_Check(__FILE__, __LINE__)
+       call nvtxEndRange()
+
+       ! 2. Run prefix sum to get target offsets
+       call gpu_scan(prefix_sum, 1, sim%c%npeak, npart_new_d)
+       npart_new = npart_new_d
+
+       if (npart_new > 0) then
+          ! Check memory constraints
+          head_part = sim%tree%npart + 1
+          if (head_part + npart_new - 1 > sim%r%ntreemax) then
+             write(*,*) 'Not enough memory for tree particle'
+             write(*,*) 'Increase ntreemax in the namelist'
+             stop
+          endif
+
+          ! 3. Fill swap table
+          call compute_sink_swap_table<<<num_blocks, num_threads>>>( &
+               & swap_local, prefix_sum, sim%c%npeak)
+          call GPU_Error_Check(__FILE__, __LINE__)
+
+          ! 4. Copy time step to device
+          dtnew_dp = real(sim%g%dtnew, kind=dp)
+          dtnew_dp_d = dtnew_dp
+
+          ! 5. Launch spawning kernel
+          num_blocks = (npart_new + num_threads - 1) / num_threads
+          call nvtxStartRange("Create New Tree Particles", color=5)!red
+          call tree_formation_kernel<<<num_blocks, num_threads>>>( &
+               & swap_local, head_part, npart_new, sim%tree%npart_tot, &
+               & real(sim%g%texp, kind=dp))
+          call GPU_Error_Check(__FILE__, __LINE__)
+          call nvtxEndRange()
+
+          ! 6. Update host-side metadata
+          sim%tree%npart = sim%tree%npart + npart_new
+          sim%tree%npart_tot = sim%tree%npart_tot + npart_new
+          sim%tree%tailp(sim%r%nlevelmax) = sim%tree%tailp(sim%r%nlevelmax) + npart_new
+       endif
+    endif
+
+    if (sim%g%myid == 1) then
+       write(*,'(" Found",I12,"  new merger tree particles for a total of ",I0)')npart_new,int(sim%tree%npart_tot,kind=4)
+    endif
+#endif
+  end subroutine gpu_tree_formation
 
 end module clump_device

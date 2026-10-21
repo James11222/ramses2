@@ -1,6 +1,6 @@
 module tree_formation_module
 #ifdef _CUDA
-  use clump_device, only: gpu_tree_clump
+  use clump_device, only: gpu_tree_clump, gpu_tree_formation
 #endif
 
 contains
@@ -59,7 +59,11 @@ recursive subroutine r_tree_formation(pst)
      call r_tree_formation(pst%pLower)
      call mdl_get_reply(pst%s%mdl,rID,0)
   else
+#ifdef _CUDA
+     call gpu_tree_formation(pst%s)
+#else
      call tree_formation(pst%s%r,pst%s%g,pst%s%m,pst%s%tree,pst%s%c)
+#endif
   endif
 
 end subroutine r_tree_formation
