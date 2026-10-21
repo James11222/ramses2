@@ -20,7 +20,7 @@ recursive subroutine m_tree_formation(pst)
   !----------------------------
   ! Find tree formation sites
   !----------------------------
-  call m_formation_site(pst)
+  call m_tree_formation_site(pst)
 
   !----------------------------
   ! Create tree particles
@@ -208,7 +208,7 @@ end subroutine tree_formation
 !###########################################################
 !###########################################################
 !###########################################################
-subroutine m_formation_site(pst)
+subroutine m_tree_formation_site(pst)
   use amr_parameters, only: flen
   use mdl_module, only: mdl_wtime
   use ramses_commons, only: pst_t
@@ -234,7 +234,7 @@ subroutine m_formation_site(pst)
   call r_tree_clump(pst)
 #endif
 
-end subroutine m_formation_site
+end subroutine m_tree_formation_site
 !################################################################
 !################################################################
 !################################################################

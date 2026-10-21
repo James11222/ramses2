@@ -29,7 +29,7 @@ recursive subroutine m_sink_formation(pst)
   !----------------------------
   ! Find sink formation sites
   !----------------------------
-  call m_formation_site(pst)
+  call m_sink_formation_site(pst)
 
   !----------------------------
   ! Create sink particles
@@ -300,7 +300,7 @@ end subroutine sink_formation
 !###########################################################
 !###########################################################
 !###########################################################
-subroutine m_formation_site(pst)
+subroutine m_sink_formation_site(pst)
   use amr_parameters, only: flen
   use mdl_module, only: mdl_wtime
   use ramses_commons, only: pst_t
@@ -331,7 +331,7 @@ subroutine m_formation_site(pst)
   end associate
 #endif
 
-end subroutine m_formation_site
+end subroutine m_sink_formation_site
 !################################################################
 !################################################################
 !################################################################
