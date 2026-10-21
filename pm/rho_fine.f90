@@ -767,6 +767,17 @@ recursive subroutine r_cic_part(pst,input_array,input_size)
            call pcs_part(pst%s,pst%s%sink,ilevel,rtype)
         endif
      endif
+#ifdef CORE
+     if(pst%s%r%core)then
+        if(pst%s%r%sink_mass_deposition_scheme==1)then
+           call cic_part(pst%s,pst%s%core,ilevel,rtype)
+        elseif(pst%s%r%sink_mass_deposition_scheme==2)then
+           call tsc_part(pst%s,pst%s%core,ilevel,rtype)
+        elseif(pst%s%r%sink_mass_deposition_scheme==3)then
+           call pcs_part(pst%s,pst%s%core,ilevel,rtype)
+        endif
+     endif
+#endif
   endif
 
 end subroutine r_cic_part
@@ -800,6 +811,9 @@ subroutine cic_part(s,p,ilevel,rtype)
   integer::i,ipart,icell,igrid,ind,idim
   type(msg_twin_realdp)::dummy_twin_realdp
   logical::part,star,sink
+#ifdef CORE
+  logical::core
+#endif
 
   associate(r=>s%r,g=>s%g,m=>s%m,mdl=>s%mdl)
 
@@ -811,11 +825,17 @@ subroutine cic_part(s,p,ilevel,rtype)
   part = p%type.eq.PART_TYPE
   star = p%type.eq.STAR_TYPE
   sink = p%type.eq.SINK_TYPE
+#ifdef CORE
+  core = p%type.eq.CORE_TYPE
+#endif
 
   ! Don't deposit mass depending on rho action type and paticle type
   if(part.and.rtype.NE.0.and.rtype.NE.1)return
   if(star.and.rtype.NE.0.and.rtype.NE.2)return
   if(sink.and.rtype.NE.0.and.rtype.NE.3)return
+#ifdef CORE
+  if(core.and.rtype.NE.0)return
+#endif
 
   ! Compute contribution to multipole
   if(ilevel==r%levelmin)then
@@ -875,7 +895,11 @@ subroutine cic_part(s,p,ilevel,rtype)
         if(igrid>0)then
            m%rho(icell,igrid)=m%rho(icell,igrid)+p%mp(ipart)*vol(ind)/vol_loc
            if(r%m_refine(ilevel)>=0)then
+#ifdef CORE
+              if(star.or.sink.or.core)then
+#else
               if(star.or.sink)then
+#endif
                  m%nref(icell,igrid)=m%nref(icell,igrid)+p%mp(ipart)*vol(ind)/r%mass_sph
               endif
               if(part)then
@@ -928,6 +952,9 @@ subroutine tsc_part(s,p,ilevel,rtype)
   integer::i,ipart,icell,igrid,ind,idim
   type(msg_twin_realdp)::dummy_twin_realdp
   logical::part,star,sink
+#ifdef CORE
+  logical::core
+#endif
 
   associate(r=>s%r,g=>s%g,m=>s%m,mdl=>s%mdl)
 
@@ -939,11 +966,17 @@ subroutine tsc_part(s,p,ilevel,rtype)
   part = p%type.eq.PART_TYPE
   star = p%type.eq.STAR_TYPE
   sink = p%type.eq.SINK_TYPE
+#ifdef CORE
+  core = p%type.eq.CORE_TYPE
+#endif
 
   ! Don't deposit mass depending on rho action type and paticle type
   if(part.and.rtype.NE.0.and.rtype.NE.1)return
   if(star.and.rtype.NE.0.and.rtype.NE.2)return
   if(sink.and.rtype.NE.0.and.rtype.NE.3)return
+#ifdef CORE
+  if(core.and.rtype.NE.0)return
+#endif
 
   ! Compute contribution to multipole
   if(ilevel==r%levelmin)then
@@ -1007,7 +1040,11 @@ subroutine tsc_part(s,p,ilevel,rtype)
         if(igrid>0)then
            m%rho(icell,igrid)=m%rho(icell,igrid)+p%mp(ipart)*vol(ind)/vol_loc
            if(r%m_refine(ilevel)>=0)then
+#ifdef CORE
+              if(star.or.sink.or.core)then
+#else
               if(star.or.sink)then
+#endif
                  m%nref(icell,igrid)=m%nref(icell,igrid)+p%mp(ipart)*vol(ind)/r%mass_sph
               endif
               if(part)then
@@ -1060,6 +1097,9 @@ subroutine pcs_part(s,p,ilevel,rtype)
   integer::i,ipart,icell,igrid,ind,idim
   type(msg_twin_realdp)::dummy_twin_realdp
   logical::part,star,sink
+#ifdef CORE
+  logical::core
+#endif
 
   associate(r=>s%r,g=>s%g,m=>s%m,mdl=>s%mdl)
 
@@ -1071,11 +1111,17 @@ subroutine pcs_part(s,p,ilevel,rtype)
   part = p%type.eq.PART_TYPE
   star = p%type.eq.STAR_TYPE
   sink = p%type.eq.SINK_TYPE
+#ifdef CORE
+  core = p%type.eq.CORE_TYPE
+#endif
 
   ! Don't deposit mass depending on rho action type and paticle type
   if(part.and.rtype.NE.0.and.rtype.NE.1)return
   if(star.and.rtype.NE.0.and.rtype.NE.2)return
   if(sink.and.rtype.NE.0.and.rtype.NE.3)return
+#ifdef CORE
+  if(core.and.rtype.NE.0)return
+#endif
 
   ! Compute contribution to multipole
   if(ilevel==r%levelmin)then
@@ -1144,7 +1190,11 @@ subroutine pcs_part(s,p,ilevel,rtype)
         if(igrid>0)then
            m%rho(icell,igrid)=m%rho(icell,igrid)+p%mp(ipart)*vol(ind)/vol_loc
            if(r%m_refine(ilevel)>=0)then
+#ifdef CORE
+              if(star.or.sink.or.core)then
+#else
               if(star.or.sink)then
+#endif
                  m%nref(icell,igrid)=m%nref(icell,igrid)+p%mp(ipart)*vol(ind)/r%mass_sph
               endif
               if(part)then
@@ -1285,6 +1335,9 @@ recursive subroutine r_split_part(pst,ilevel,input_size)
      if(pst%s%r%part)call split_part(pst%s,pst%s%p   ,ilevel)
      if(pst%s%r%star)call split_part(pst%s,pst%s%star,ilevel)
      if(pst%s%r%sink)call split_part(pst%s,pst%s%sink,ilevel)
+#ifdef CORE
+     if(pst%s%r%core)call split_part(pst%s,pst%s%core,ilevel)
+#endif
      if(pst%s%r%tree)call split_part(pst%s,pst%s%tree,ilevel)
      if(pst%s%r%trac)call split_part(pst%s,pst%s%trac,ilevel)
   endif
@@ -2046,6 +2099,9 @@ recursive subroutine r_sort_part(pst,ilevel,input_size)
      if(pst%s%r%part)call sort_part(pst%s,pst%s%p   ,ilevel)
      if(pst%s%r%star)call sort_part(pst%s,pst%s%star,ilevel)
      if(pst%s%r%sink)call sort_part(pst%s,pst%s%sink,ilevel)
+#ifdef CORE
+     if(pst%s%r%core)call sort_part(pst%s,pst%s%core,ilevel)
+#endif
      if(pst%s%r%tree)call sort_part(pst%s,pst%s%tree,ilevel)
      if(pst%s%r%trac)call sort_part(pst%s,pst%s%trac,ilevel)
   endif
