@@ -1542,6 +1542,14 @@ subroutine split_part(s,p,ilevel)
            p%tm(ipart)=p%tm(jpart)
            p%tm(jpart)=mp_tmp
         endif
+#ifdef CORE
+        ! Swap specific energy
+        if(allocated(p%up))then
+           mp_tmp=p%up(ipart)
+           p%up(ipart)=p%up(jpart)
+           p%up(jpart)=mp_tmp
+        endif
+#endif
         ! Swap potential (per-particle; must move with idp so the
         ! gathered potential stays attached to its particle).
         if(allocated(p%phip))then
