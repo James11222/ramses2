@@ -318,6 +318,29 @@ subroutine allocate_peak_patch_arrays(s)
   allocate(c%clump_mass(1:c%npeak_max))
   allocate(c%clump_vol(1:c%npeak_max))
   allocate(c%clump_rad(1:c%npeak_max))
+#ifdef CORE
+  ! Core criteria of the clumps, with core formation or the core catalogue on
+  if(r%core_form.or.r%output_core_clump)then
+     allocate(c%clump_mass4(1:c%npeak_max))
+     allocate(c%kinetic_support(1:c%npeak_max))
+     allocate(c%thermal_support(1:c%npeak_max))
+     allocate(c%magnetic_support(1:c%npeak_max))
+     allocate(c%grav_term(1:c%npeak_max))
+     allocate(c%rad_term(1:c%npeak_max))
+     allocate(c%virial_ratio(1:c%npeak_max))
+     allocate(c%bound(1:c%npeak_max))
+     allocate(c%contracting(1:c%npeak_max))
+     c%clump_mass4=0d0
+     c%kinetic_support=0d0
+     c%thermal_support=0d0
+     c%magnetic_support=0d0
+     c%grav_term=0d0
+     c%rad_term=0d0
+     c%virial_ratio=huge(0d0)
+     c%bound=.false.
+     c%contracting=.false.
+  endif
+#endif
 
   allocate(c%npart(1:c%npeak_max))
   allocate(c%particle_mass(1:c%npeak_max))
@@ -350,6 +373,12 @@ subroutine allocate_peak_patch_arrays(s)
      allocate(c%nsink(1:c%npeak_max))
      allocate(c%form_sink(1:c%npeak_max))
   endif
+#ifdef CORE
+  if(r%core_form)then
+     allocate(c%ncore(1:c%npeak_max))
+     if(.not.r%sink)allocate(c%form_sink(1:c%npeak_max))
+  endif
+#endif
 
   !--------------------
   ! Allocate hash table
@@ -390,6 +419,12 @@ subroutine allocate_peak_patch_arrays(s)
      allocate(s%sink%pid(1:s%sink%npart))
      allocate(s%sink%hid(1:s%sink%npart))
   endif
+#ifdef CORE
+  if(r%core)then
+     allocate(s%core%pid(1:s%core%npart))
+     allocate(s%core%hid(1:s%core%npart))
+  endif
+#endif
   if(r%tree)then
      allocate(s%tree%pid(1:s%tree%npart))
      allocate(s%tree%hid(1:s%tree%npart))
@@ -455,6 +490,10 @@ subroutine deallocate_peak_patch_arrays(s)
 
   ! Deallocate cumulative peak count CPU array
   deallocate(c%npeak_cum)
+#ifdef CORE
+  ! Cores test ntest_tot to know whether the clump arrays are allocated
+  c%ntest_tot=0
+#endif
   if(c%npeak_tot==0)return
 
   ! Deallocate peak-patch arrays
@@ -482,6 +521,17 @@ subroutine deallocate_peak_patch_arrays(s)
   deallocate(c%clump_mass)
   deallocate(c%clump_vol)
   deallocate(c%clump_rad)
+#ifdef CORE
+  if(allocated(c%clump_mass4))deallocate(c%clump_mass4)
+  if(allocated(c%kinetic_support))deallocate(c%kinetic_support)
+  if(allocated(c%thermal_support))deallocate(c%thermal_support)
+  if(allocated(c%magnetic_support))deallocate(c%magnetic_support)
+  if(allocated(c%grav_term))deallocate(c%grav_term)
+  if(allocated(c%rad_term))deallocate(c%rad_term)
+  if(allocated(c%virial_ratio))deallocate(c%virial_ratio)
+  if(allocated(c%bound))deallocate(c%bound)
+  if(allocated(c%contracting))deallocate(c%contracting)
+#endif
 
   deallocate(c%npart)
   deallocate(c%particle_mass)
@@ -508,6 +558,12 @@ subroutine deallocate_peak_patch_arrays(s)
      deallocate(c%nsink)
      deallocate(c%form_sink)
   endif
+#ifdef CORE
+  if(r%core_form)then
+     deallocate(c%ncore)
+     if(.not.r%sink)deallocate(c%form_sink)
+  endif
+#endif
 
   ! Deallocate hash table
   call reset_entire_hash_simple(c%peak_dict)
@@ -535,6 +591,12 @@ subroutine deallocate_peak_patch_arrays(s)
      deallocate(s%sink%pid)
      deallocate(s%sink%hid)
   endif
+#ifdef CORE
+  if(r%core)then
+     deallocate(s%core%pid)
+     deallocate(s%core%hid)
+  endif
+#endif
   if(r%tree)then
      deallocate(s%tree%pid)
      deallocate(s%tree%hid)
