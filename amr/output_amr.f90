@@ -723,7 +723,7 @@ subroutine output_header(r,g,p,filename)
   ! Keep track of what particle fields are present
   write(ilun,*)'Particle fields'
   write(ilun,'(a)',advance='no')'pos vel mass '
-  if(allocated(p%phip))then
+  if(allocated(p%phip).and.index(filename,'output')/=0)then
      write(ilun,'(a)',advance='no')'potential '
   endif
   if(allocated(p%zp))then
