@@ -502,15 +502,9 @@ subroutine gpu_allocate_part(sim)
 #ifdef OUTPUT_PARTICLE_POTENTIAL
   allocate(phip(1:sim%r%npartmax))
 #endif
-  allocate(xp_swap(1:sim%r%npartmax))
-  allocate(isp_swap(1:sim%r%npartmax))
-  allocate(idp_swap(1:sim%r%npartmax))
-  ! CUB workspace
-#if defined(CUB_SORT_PART)
-  allocate(hkeyp(1:sim%r%npartmax))
-#endif
-  ! Prefix sum arrays
+  ! Particle scratch and prefix sum arrays
   scan_size = sim%r%npartmax
+  call ensure_part_swap_capacity(scan_size)
   call ensure_scan_capacity(scan_size, sim%r%part_dep_algo)
 
 end subroutine gpu_allocate_part
@@ -539,15 +533,9 @@ subroutine gpu_allocate_star(sim)
 #ifdef OUTPUT_PARTICLE_POTENTIAL
   allocate(star_phip(1:sim%r%nstarmax))
 #endif
-  if (.not. allocated(xp_swap)) allocate(xp_swap(1:sim%r%nstarmax))
-  if (.not. allocated(isp_swap)) allocate(isp_swap(1:sim%r%nstarmax))
-  if (.not. allocated(idp_swap)) allocate(idp_swap(1:sim%r%nstarmax))
-  ! CUB workspace
-#if defined(CUB_SORT_PART)
-  if (.not. allocated(hkeyp)) allocate(hkeyp(1:sim%r%nstarmax))
-#endif
-  ! Prefix sum arrays
+  ! Particle scratch and prefix sum arrays
   scan_size = sim%r%nstarmax
+  call ensure_part_swap_capacity(scan_size)
   call ensure_scan_capacity(scan_size, sim%r%star_dep_algo)
 
 end subroutine gpu_allocate_star
@@ -577,15 +565,9 @@ subroutine gpu_allocate_sink(sim)
 #ifdef OUTPUT_PARTICLE_POTENTIAL
   allocate(sink_phip(1:sim%r%nsinkmax))
 #endif
-  if (.not. allocated(xp_swap)) allocate(xp_swap(1:sim%r%nsinkmax))
-  if (.not. allocated(isp_swap)) allocate(isp_swap(1:sim%r%nsinkmax))
-  if (.not. allocated(idp_swap)) allocate(idp_swap(1:sim%r%nsinkmax))
-  ! CUB workspace
-#if defined(CUB_SORT_PART)
-  if (.not. allocated(hkeyp)) allocate(hkeyp(1:sim%r%nsinkmax))
-#endif
-  ! Prefix sum arrays
+  ! Particle scratch and prefix sum arrays
   scan_size = sim%r%nsinkmax
+  call ensure_part_swap_capacity(scan_size)
   call ensure_scan_capacity(scan_size, sim%r%sink_dep_algo)
 
 end subroutine gpu_allocate_sink
@@ -614,18 +596,62 @@ subroutine gpu_allocate_tree(sim)
 #ifdef OUTPUT_PARTICLE_POTENTIAL
   allocate(tree_phip(1:sim%r%ntreemax))
 #endif
-  if (.not. allocated(xp_swap)) allocate(xp_swap(1:sim%r%ntreemax))
-  if (.not. allocated(isp_swap)) allocate(isp_swap(1:sim%r%ntreemax))
-  if (.not. allocated(idp_swap)) allocate(idp_swap(1:sim%r%ntreemax))
-  ! CUB workspace
-#if defined(CUB_SORT_PART)
-  if (.not. allocated(hkeyp)) allocate(hkeyp(1:sim%r%ntreemax))
-#endif
-  ! Prefix sum arrays (trees are massless: no CIC deposit workspace)
+  ! Particle scratch and prefix sum arrays (trees are massless: no CIC deposit workspace)
   scan_size = sim%r%ntreemax
+  call ensure_part_swap_capacity(scan_size)
   call ensure_scan_capacity(scan_size, 1)
 
 end subroutine gpu_allocate_tree
+!###########################################################
+!###########################################################
+!###########################################################
+!###########################################################
+!> Grow shared particle swap and sort scratch buffers to at least min_capacity.
+subroutine ensure_part_swap_capacity(min_capacity)
+  implicit none
+  integer(kind=4), intent(in) :: min_capacity
+
+  if (min_capacity <= 0) return
+
+  if (allocated(xp_swap)) then
+     if (size(xp_swap) < min_capacity) then
+        deallocate(xp_swap)
+        allocate(xp_swap(1:min_capacity))
+     endif
+  else
+     allocate(xp_swap(1:min_capacity))
+  endif
+
+  if (allocated(isp_swap)) then
+     if (size(isp_swap) < min_capacity) then
+        deallocate(isp_swap)
+        allocate(isp_swap(1:min_capacity))
+     endif
+  else
+     allocate(isp_swap(1:min_capacity))
+  endif
+
+  if (allocated(idp_swap)) then
+     if (size(idp_swap) < min_capacity) then
+        deallocate(idp_swap)
+        allocate(idp_swap(1:min_capacity))
+     endif
+  else
+     allocate(idp_swap(1:min_capacity))
+  endif
+
+#if defined(CUB_SORT_PART)
+  if (allocated(hkeyp)) then
+     if (size(hkeyp) < min_capacity) then
+        deallocate(hkeyp)
+        allocate(hkeyp(1:min_capacity))
+     endif
+  else
+     allocate(hkeyp(1:min_capacity))
+  endif
+#endif
+
+end subroutine ensure_part_swap_capacity
 !###########################################################
 !###########################################################
 !###########################################################
