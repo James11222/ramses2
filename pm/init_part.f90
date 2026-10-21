@@ -46,6 +46,11 @@ recursive subroutine r_init_part(pst)
         call gpu_allocate_sink(pst%s)
 #endif
      end if
+#ifdef CORE
+     if(pst%s%r%core)then
+        call init_core(pst%s%r,pst%s%g,pst%s%core)
+     end if
+#endif
      if(pst%s%r%tree)then
         call init_tree(pst%s%r,pst%s%g,pst%s%tree)
      end if
@@ -196,6 +201,56 @@ subroutine init_sink(r,g,p)
   p%headp=1
   p%tailp=0
 end subroutine init_sink
+!#########################################################################
+!#########################################################################
+!#########################################################################
+!#########################################################################
+#ifdef CORE
+subroutine init_core(r,g,p)
+  use amr_parameters, only: ndim
+  use amr_commons, only: run_t,global_t
+  use pm_parameters, only: CORE_TYPE
+  use pm_commons, only: part_t
+  implicit none
+  type(run_t)::r
+  type(global_t)::g
+  type(part_t)::p
+  !-------------------------------------------
+  ! Allocate core particle variables
+  !-------------------------------------------
+  p%type=CORE_TYPE
+  p%static=r%static_sink
+  allocate(p%xp    (r%ncoremax,ndim))
+  allocate(p%vp    (r%ncoremax,ndim))
+  allocate(p%fp    (r%ncoremax,ndim))
+  allocate(p%jp    (r%ncoremax,ndim))
+  allocate(p%mp    (r%ncoremax))
+  allocate(p%zp    (r%ncoremax))
+  allocate(p%tp    (r%ncoremax))
+  allocate(p%up    (r%ncoremax))
+  allocate(p%levelp(r%ncoremax))
+  allocate(p%idp   (r%ncoremax))
+  p%nvaralloc=4*ndim+6
+#ifdef OUTPUT_PARTICLE_POTENTIAL
+  allocate(p%phip  (r%ncoremax))
+  p%nvaralloc=p%nvaralloc+1
+#endif
+  ! Allocate workspace variables
+  allocate(p%sortp (r%ncoremax))
+  allocate(p%workp (r%ncoremax))
+  ! Allocate head and tail of particle levels
+  if(ANY(.not.r%periodic(1:ndim)))then
+     allocate(p%headp(r%levelmin-1:r%nlevelmax))
+     allocate(p%tailp(r%levelmin-1:r%nlevelmax))
+  else
+     allocate(p%headp(r%levelmin:r%nlevelmax))
+     allocate(p%tailp(r%levelmin:r%nlevelmax))
+  endif
+  ! No particle just yet
+  p%headp=1
+  p%tailp=0
+end subroutine init_core
+#endif
 !#########################################################################
 !#########################################################################
 !#########################################################################
