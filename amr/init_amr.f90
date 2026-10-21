@@ -68,7 +68,7 @@ recursive subroutine r_init_amr(pst)
         allocate(pst%s%m_mg)
         call init_amr(pst%s%r,pst%s%g,pst%s%m_mg,'mg')
      endif
-     if(pst%s%r%clump_finder .or. pst%s%r%sink_form)then
+     if(pst%s%r%clump_finder .or. pst%s%r%sink_form .or. pst%s%r%core_form)then
         allocate(pst%s%c)
      endif
      call init_params(pst%s%mdl,pst%s%r,pst%s%g)

@@ -27,7 +27,16 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
   use newdt_fine_module, only: m_newdt_fine,r_broadcast_dt,in_broadcast_dt_t
   use movie_module, only: m_output_frame
   use star_formation_module, only: out_star_formation_t, r_star_formation
+#ifdef CORE
+  use core_to_star_formation_module, only: in_core_to_star_t,out_core_to_star_t,r_core_to_star_formation
+#endif
   use sink_formation_module, only: m_sink_formation
+#ifdef CORE
+  use core_step_module, only: core_step_state_t,m_core_step, &
+       CORE_PHASE_FORMATION,CORE_PHASE_PREDICTOR,CORE_PHASE_MERGER, &
+       CORE_PHASE_STAR_RECONCILE,CORE_PHASE_RETIRE_BOUNDARY, &
+       CORE_PHASE_ACC_PREPARE,CORE_PHASE_ACC_FINALIZE
+#endif
   use tree_formation_module, only: m_tree_formation
   use feedback_module, only: out_feedback_t, r_thermal_feedback, m_mechanical_feedback
   use clump_finder_module, only: m_clump_finder
@@ -60,8 +69,15 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
   !-------------------------------------------------------------------!
   type(in_broadcast_dt_t) :: in_broadcast_dt
   type(out_star_formation_t) :: output_star
+#ifdef CORE
+  type(in_core_to_star_t) :: input_core_star
+  type(out_core_to_star_t) :: output_core_star
+#endif
   type(out_feedback_t) :: output_fbk
   type(out_accretion_t) :: output_acc
+#ifdef CORE
+  type(core_step_state_t) :: core_state
+#endif
   real(kind=8) :: mass_fbk
   real(kind=8) :: tcurr=0
   real(kind=8), save :: tprev=0.
@@ -69,6 +85,11 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
   logical, save :: bkp_last_done=.false.
 
   associate(r=>pst%s%r, g=>pst%s%g, m=>pst%s%m, mdl=>pst%s%mdl)
+
+#ifdef CORE
+  call m_core_step(pst,core_state,CORE_PHASE_RETIRE_BOUNDARY, &
+       ilevel=ilevel,icount=icount)
+#endif
 
   if(m%noct_tot(ilevel)==0)return
   if(r%verbose)write(*,'(" Entering amr_step",i1," for level",i2)')icount,ilevel
@@ -219,6 +240,11 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
   if(r%poisson)then
      call m_timer('grav force','start')
      call m_force_fine(pst,ilevel,icount)
+#ifdef CORE
+     call m_core_step(pst,core_state,CORE_PHASE_PREDICTOR,ilevel=ilevel)
+     ! Formation uses the clump catalogue the predictor has just built
+     call m_core_step(pst,core_state,CORE_PHASE_FORMATION,ilevel=ilevel)
+#endif
   end if
 #endif
 
@@ -371,6 +397,10 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
      end if
   end if
 
+#ifdef CORE
+  call m_core_step(pst,core_state,CORE_PHASE_ACC_PREPARE,ilevel=ilevel)
+#endif
+
   !-----------
   ! Hydro step
   !-----------
@@ -466,6 +496,10 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
      call r_cooling_fine(pst,ilevel,1)
   endif
 
+#ifdef CORE
+  call m_core_step(pst,core_state,CORE_PHASE_ACC_FINALIZE,ilevel=ilevel)
+#endif
+
   !----------------------------
   ! Sink merger
   !----------------------------
@@ -473,6 +507,10 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
      call m_timer('sink - merger','start')
      call r_sink_merger(pst,ilevel,1)
   end if
+
+#ifdef CORE
+  call m_core_step(pst,core_state,CORE_PHASE_MERGER,ilevel=ilevel)
+#endif
 
   !-------------------------------------------
   ! Perform first kick and drift for particles
@@ -487,10 +525,27 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
   !----------------------------------
   if(r%star.and.r%hydro)then
      call m_timer('star - formation','start')
+#ifdef CORE
+     if(r%core_to_star)then
+        input_core_star%ilevel=ilevel
+        call r_core_to_star_formation(pst,input_core_star,storage_size(input_core_star)/32, &
+             output_core_star,storage_size(output_core_star)/32)
+        output_star%mass=output_core_star%mass
+     else
+        call r_star_formation(pst,ilevel,1,output_star,2)
+     endif
+#else
      call r_star_formation(pst,ilevel,1,output_star,2)
+#endif
      if(output_star%mass>0)then
         g%mass_star_tot=g%mass_star_tot+output_star%mass
+#ifdef CORE
+        if(r%core_to_star)g%mass_sink_tot=g%mass_sink_tot-output_star%mass
+#endif
      endif
+#ifdef CORE
+     call m_core_step(pst,core_state,CORE_PHASE_STAR_RECONCILE)
+#endif
   endif
 
   !-----------------------

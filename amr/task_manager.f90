@@ -131,11 +131,26 @@ function worker_init(mdl) result(pst)
   use cooling_fine_module, only: r_cooling_fine
   use init_xion_module, only: r_init_xion
   use star_formation_module, only: r_star_formation
+#ifdef CORE
+  use core_to_star_formation_module, only: r_core_to_star_formation
+#endif
   use sink_formation_module, only: r_sink_formation,r_sink_clump
+#ifdef CORE
+  use core_formation_module, only: r_core_formation,r_core_clump
+  use input_part_ascii_module, only: r_input_core_ascii
+#endif
   use tree_formation_module, only: r_tree_formation,r_tree_clump
   use feedback_module, only: r_thermal_feedback, r_mechanical_feedback
   use sink_evolution_module, only: r_sink_evolution
+#ifdef CORE
+  use core_evolution_module, only: r_core_evolution,in_core_acc_t,out_core_acc_t
+  use core_retirement_module, only: r_core_retirement, &
+       in_core_retire_t,out_core_retire_t
+#endif
   use sink_merger_module, only: r_sink_merger
+#ifdef CORE
+  use core_merger_module, only: r_core_merger
+#endif
   use newdt_fine_module, only: r_newdt_part,r_broadcast_dt,r_max_B_and_Q
   use rho_fine_module, only: r_split_part,r_sort_part
 #ifdef GRAV
@@ -152,6 +167,9 @@ function worker_init(mdl) result(pst)
   use clump_finder_module, only: r_clump_finder
   use clump_merger_module, only: r_deallocate_clump
   use output_clump_module, only: r_output_clump
+#ifdef CORE
+  use core_clump_output_module, only: r_output_core_clump
+#endif
   use lightcone_module, only: r_output_lightcone
   use movie_module, only: r_output_frame
   use amr_parameters, only: nhilbert
@@ -183,6 +201,12 @@ function worker_init(mdl) result(pst)
 
   integer::dummy
   integer(kind=8)::dummy8
+#ifdef CORE
+  type(in_core_acc_t)::dummy_core_acc_in
+  type(out_core_acc_t)::dummy_core_acc_out
+  type(in_core_retire_t)::dummy_core_retire_in
+  type(out_core_retire_t)::dummy_core_retire_out
+#endif
   integer::ncpu
   type(mdl_t),target::mdl
   type(pst_t),allocatable::pst
@@ -213,6 +237,9 @@ function worker_init(mdl) result(pst)
   call mdl_add_service(pst%s%mdl,MDL_INPUT_PART_ASCII,       pst,C_FUNLOC(r_input_part_ascii),storage_size(pst%s%p%npart_tot)/32,0,"input_part_ascii")
   call mdl_add_service(pst%s%mdl,MDL_INPUT_STAR_ASCII,       pst,C_FUNLOC(r_input_star_ascii),storage_size(pst%s%p%npart_tot)/32,0,"input_star_ascii")
   call mdl_add_service(pst%s%mdl,MDL_INPUT_SINK_ASCII,       pst,C_FUNLOC(r_input_sink_ascii),storage_size(pst%s%p%npart_tot)/32,0,"input_sink_ascii")
+#ifdef CORE
+  call mdl_add_service(pst%s%mdl,MDL_INPUT_CORE_ASCII,       pst,C_FUNLOC(r_input_core_ascii),storage_size(pst%s%p%npart_tot)/32,0,"input_core_ascii")
+#endif
   call mdl_add_service(pst%s%mdl,MDL_INPUT_PART_RESTART,     pst,C_FUNLOC(r_input_part_restart),(MDL_MAX_CPU+1),0,"input_part_restart")
   call mdl_add_service(pst%s%mdl,MDL_INPUT_PART_RAMSES,      pst,C_FUNLOC(r_input_part_ramses),(MDL_MAX_CPU+1),0,"input_part_ramses")
   call mdl_add_service(pst%s%mdl,MDL_INPUT_PART_GADGET,      pst,C_FUNLOC(r_input_part_gadget),MDL_MAX_CPU,6,"input_part_gadget")
@@ -248,6 +275,10 @@ function worker_init(mdl) result(pst)
   call mdl_add_service(pst%s%mdl,MDL_OUTPUT_AMR,             pst,C_FUNLOC(r_output_amr),flen,0,"output_amr")
   call mdl_add_service(pst%s%mdl,MDL_OUTPUT_HYDRO,           pst,C_FUNLOC(r_output_hydro),flen,0,"output_hydro")
   call mdl_add_service(pst%s%mdl,MDL_OUTPUT_CLUMP,           pst,C_FUNLOC(r_output_clump),flen,0,"output_clump")
+#ifdef CORE
+  call mdl_add_service(pst%s%mdl,MDL_OUTPUT_CORE_CLUMP, &
+       pst,C_FUNLOC(r_output_core_clump),flen,0,"output_core_clump")
+#endif
   call mdl_add_service(pst%s%mdl,MDL_OUTPUT_FRAME,           pst,C_FUNLOC(r_output_frame),2,2*pst%s%r%nw_frame*pst%s%r%nh_frame,"output_frame")
   call mdl_add_service(pst%s%mdl,MDL_OUTPUT_POISSON,         pst,C_FUNLOC(r_output_poisson),flen/4,0,"output_poisson")
   call mdl_add_service(pst%s%mdl,MDL_OUTPUT_PART,            pst,C_FUNLOC(r_output_part),flen/4,0,"output_part")
@@ -260,14 +291,33 @@ function worker_init(mdl) result(pst)
   call mdl_add_service(pst%s%mdl,MDL_COOLING_FINE,           pst,C_FUNLOC(r_cooling_fine),1,0,"cooling_fine")
   call mdl_add_service(pst%s%mdl,MDL_INIT_XION,              pst,C_FUNLOC(r_init_xion),1,0,"init_xion")
   call mdl_add_service(pst%s%mdl,MDL_STAR_FORMATION,         pst,C_FUNLOC(r_star_formation),1,2,"star_formation")
+#ifdef CORE
+  call mdl_add_service(pst%s%mdl,MDL_CORE_TO_STAR_FORMATION, &
+       pst,C_FUNLOC(r_core_to_star_formation),1,4,"core_to_star_formation")
+#endif
   call mdl_add_service(pst%s%mdl,MDL_SINK_FORMATION,         pst,C_FUNLOC(r_sink_formation),1,2,"sink_formation")
   call mdl_add_service(pst%s%mdl,MDL_SINK_CLUMP,             pst,C_FUNLOC(r_sink_clump),1,2,"sink_clump")
+#ifdef CORE
+  call mdl_add_service(pst%s%mdl,MDL_CORE_FORMATION, pst,C_FUNLOC(r_core_formation),1,2,"core_formation")
+  call mdl_add_service(pst%s%mdl,MDL_CORE_CLUMP,     pst,C_FUNLOC(r_core_clump),2,2,"core_clump")
+#endif
   call mdl_add_service(pst%s%mdl,MDL_TREE_FORMATION,         pst,C_FUNLOC(r_tree_formation),1,2,"tree_formation")
   call mdl_add_service(pst%s%mdl,MDL_TREE_CLUMP,             pst,C_FUNLOC(r_tree_clump),1,2,"tree_clump")
   call mdl_add_service(pst%s%mdl,MDL_THERMAL_FEEDBACK,       pst,C_FUNLOC(r_thermal_feedback),1,2,"thermal_feedback")
   call mdl_add_service(pst%s%mdl,MDL_MECHANICAL_FEEDBACK,    pst,C_FUNLOC(r_mechanical_feedback),1,2,"mechanical_feedback")
   call mdl_add_service(pst%s%mdl,MDL_SINK_EVOLUTION,         pst,C_FUNLOC(r_sink_evolution),1,2,"sink_evolution")
+#ifdef CORE
+  call mdl_add_service(pst%s%mdl,MDL_CORE_EVOLUTION, pst,C_FUNLOC(r_core_evolution), &
+       storage_size(dummy_core_acc_in)/32,storage_size(dummy_core_acc_out)/32,"core_evolution")
+  call mdl_add_service(pst%s%mdl,MDL_CORE_RETIREMENT, &
+       pst,C_FUNLOC(r_core_retirement), &
+       storage_size(dummy_core_retire_in)/32, &
+       storage_size(dummy_core_retire_out)/32,"core_retirement")
+#endif
   call mdl_add_service(pst%s%mdl,MDL_SINK_MERGER,            pst,C_FUNLOC(r_sink_merger),1,0,"sink_merger")
+#ifdef CORE
+  call mdl_add_service(pst%s%mdl,MDL_CORE_MERGER,    pst,C_FUNLOC(r_core_merger),1,0,"core_merger")
+#endif
   call mdl_add_service(pst%s%mdl,MDL_NEWDT_PART,             pst,C_FUNLOC(r_newdt_part),0,0,"newdt_part")
   call mdl_add_service(pst%s%mdl,MDL_MAX_B_AND_Q,            pst,C_FUNLOC(r_max_B_and_Q),1,4,"max_B_and_Q")
   call mdl_add_service(pst%s%mdl,MDL_BROADCAST_DT,           pst,C_FUNLOC(r_broadcast_dt),24,0,"broadcast_dt")
