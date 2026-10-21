@@ -3213,6 +3213,46 @@ subroutine gpu_newdt_sink(sim, ilevel, vmax, ekin)
 
 end subroutine gpu_newdt_sink
 
+subroutine gpu_newdt_tree(sim, ilevel, vmax, ekin)
+  use nvtx
+  use ramses_commons, only: ramses_t
+  type(ramses_t), intent(inout) :: sim
+  integer, intent(in) :: ilevel
+  real(kind=8), intent(inout) :: vmax, ekin
+
+  integer(kind=4) :: head_idx, num_parts
+  integer(kind=8) :: leading
+  integer :: num_threads, num_blocks
+  real(kind=8), device :: vmax_dev
+  real(kind=8), device :: ekin_dev
+  real(kind=8) :: vmax_host, ekin_host
+
+  head_idx  = sim%tree%headp(ilevel)
+  num_parts = sim%tree%tailp(ilevel) - head_idx + 1
+
+  if (num_parts <= 0) return
+
+  leading = sim%r%ntreemax
+  vmax_dev = 0.0_dp
+  ekin_dev = 0.0_dp
+
+  num_threads = 256
+  num_blocks  = (num_parts + num_threads - 1) / num_threads
+
+  call nvtxStartRange("gpu_newdt_tree", color=4) ! purple
+  call gpu_newdt_part_kernel<<<num_blocks, num_threads>>>(tree_vp, tree_mp, &
+       & vmax_dev, ekin_dev, head_idx, num_parts, leading)
+  call GPU_Error_Check("gpu/gpu_part.cuf", 0)
+  call nvtxEndRange()
+
+  vmax_host = vmax_dev   ! D->H
+  ekin_host = ekin_dev   ! D->H
+
+  vmax = MAX(vmax, vmax_host)
+  ekin = ekin + ekin_host
+
+end subroutine gpu_newdt_tree
+
 attributes(device) subroutine gather_cic_force_part(f_d, hash_key_d, hash_val_d, &
      hash_size_d, ckey_max_d, key_off_d, box_ckey_min_d, box_ckey_max_d, periodic_d, &
      ngridmax, x_in, cell_level, grid_level, ff, ok_level)
@@ -3601,5 +3641,47 @@ subroutine gpu_kick_drift_sink(sim, ilevel, action_part)
   endif
 
 end subroutine gpu_kick_drift_sink
+
+subroutine gpu_kick_drift_tree(sim, ilevel, action_part)
+  use nvtx
+  use ramses_commons, only: ramses_t
+  type(ramses_t), intent(inout) :: sim
+  integer, intent(in) :: ilevel
+  integer, intent(in) :: action_part
+
+  integer(kind=4) :: head_idx, tail_idx, num_parts
+  integer :: num_threads, num_blocks
+  real(kind=8) :: dx_loc, skip1, skip2, skip3
+
+  dx_loc = sim%r%boxlen/2**ilevel
+  skip1 = sim%m%skip(1)
+  skip2 = sim%m%skip(2)
+  skip3 = sim%m%skip(3)
+
+  ! Refresh the persistent (module-scope) device time-step arrays for this step.
+  dtnew_part_d = sim%g%dtnew
+  dtold_part_d = sim%g%dtold
+
+  head_idx = sim%tree%headp(ilevel)
+  tail_idx = sim%tree%tailp(ilevel)
+  num_parts = tail_idx - head_idx + 1
+
+  if (num_parts > 0) then
+
+     num_threads = 128
+     num_blocks  = (num_parts + num_threads - 1) / num_threads
+
+     call nvtxStartRange("gpu_kick_drift_tree", color=4) ! purple
+     call kick_drift_part_kernel<<<num_blocks, num_threads>>>(tree_xp, tree_vp, tree_xp, &
+          & tree_levelp, f, hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
+          & box_ckey_min, box_ckey_max, box_size, periodic, sim%r%ngridmax, &
+          & dtnew_part_d, dtold_part_d, &
+          & skip1, skip2, skip3, dx_loc, 0d0, action_part, ilevel, head_idx, num_parts, &
+          & int(sim%r%ntreemax,8), .false.)
+     call nvtxEndRange()
+
+  endif
+
+end subroutine gpu_kick_drift_tree
 
 end module part_device

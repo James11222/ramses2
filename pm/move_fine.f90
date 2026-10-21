@@ -1,7 +1,7 @@
 module move_fine_module
   use rho_fine_module, only: cic_weight, cic_index, tsc_weight, tsc_index, pcs_weight, pcs_index
 #ifdef _CUDA
-  use part_device, only: gpu_kick_drift_part, gpu_kick_drift_star, gpu_kick_drift_sink
+  use part_device, only: gpu_kick_drift_part, gpu_kick_drift_star, gpu_kick_drift_sink, gpu_kick_drift_tree
 #elif defined(_METAL)
   use metal_runner, only: metal_kick_drift_part
 #endif
@@ -68,6 +68,7 @@ recursive subroutine r_kick_drift_part(pst,input_array,input_size,output_array,o
      if (pst%s%r%part) call gpu_kick_drift_part(pst%s, ilevel, action_part)
      if (pst%s%r%star) call gpu_kick_drift_star(pst%s, ilevel, action_part)
      if (pst%s%r%sink) call gpu_kick_drift_sink(pst%s, ilevel, action_part)
+     if (pst%s%r%tree) call gpu_kick_drift_tree(pst%s, ilevel, action_part)
 #elif defined(_METAL)
      if (pst%s%r%part) call metal_kick_drift_part(pst%s, ilevel, action_part)
 #else
