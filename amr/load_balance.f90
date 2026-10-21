@@ -1237,14 +1237,12 @@ subroutine balance_part(s,p,ilevel)
            p%tm(ipart)=p%tm(jpart)
            p%tm(jpart)=tp_tmp
         endif
-#ifdef CORE
         ! Swap specific energy
         if(allocated(p%up))then
            tp_tmp=p%up(ipart)
            p%up(ipart)=p%up(jpart)
            p%up(jpart)=tp_tmp
         endif
-#endif
         ! Swap levels
         levelp_tmp=p%levelp(ipart)
         p%levelp(ipart)=p%levelp(jpart)
@@ -1647,7 +1645,6 @@ subroutine balance_part(s,p,ilevel)
 
   endif
 
-#ifdef CORE
   !-------------------------
   ! Swap specific energies
   !-------------------------
@@ -1690,7 +1687,6 @@ subroutine balance_part(s,p,ilevel)
      call MPI_WAITALL(countsend,reqsend,statuses,info)
 
   endif
-#endif
 
   !-------------------------
   ! Swap sizes
