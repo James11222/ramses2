@@ -658,6 +658,7 @@ subroutine sink_flag(s,p,ilevel)
   ! Loop over sink particles at current level and finer levels
   hash_nbor(0) = ilevel+1
   do ipart = p%headp(ilevel), p%npart
+     if(p%mp(ipart)<=0d0)cycle
 
      ! Sink sphere center in units of current level Cartesian coordinates
      xcen(1:ndim) = (p%xp(ipart,1:ndim)+m%skip(1:ndim)) / dx_loc
