@@ -115,7 +115,22 @@ if log0:
 else:
     grid.cell_data["values"] = data.flatten(order="F")
 
-pl = pv.Plotter(window_size=[1600, 1600])
-pl.add_volume(grid, scalars="values", cmap=col, opacity="sigmoid")
+# Color range: --min/--max are given in linear units like in amr2img.py
+values = grid.cell_data["values"]
+if vmin is None:
+    vmin = np.min(values)
+elif log0:
+    vmin = np.log10(vmin)
+if vmax is None:
+    vmax = np.max(values)
+elif log0:
+    vmax = np.log10(vmax)
+
+pl = pv.Plotter(off_screen=no_display, window_size=[1600, 1600])
+pl.add_volume(grid, scalars="values", cmap=col, opacity="sigmoid", clim=[vmin, vmax])
 pl.add_bounding_box()
-pl.show()
+
+if args.out:
+    pl.show(screenshot=args.out)
+else:
+    pl.show()
