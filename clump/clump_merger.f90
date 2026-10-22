@@ -490,10 +490,6 @@ subroutine deallocate_peak_patch_arrays(s)
 
   ! Deallocate cumulative peak count CPU array
   deallocate(c%npeak_cum)
-#ifdef CORE
-  ! Cores test ntest_tot to know whether the clump arrays are allocated
-  c%ntest_tot=0
-#endif
   if(c%npeak_tot==0)return
 
   ! Deallocate peak-patch arrays
