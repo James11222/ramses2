@@ -33,8 +33,8 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
   use sink_formation_module, only: m_sink_formation
 #ifdef CORE
   use core_step_module, only: core_step_state_t,m_core_step, &
-       CORE_PHASE_FORMATION,CORE_PHASE_PREDICTOR,CORE_PHASE_MERGER, &
-       CORE_PHASE_STAR_RECONCILE,CORE_PHASE_RETIRE_BOUNDARY, &
+       CORE_PHASE_FORMATION,CORE_PHASE_MERGER, &
+       CORE_PHASE_RETIRE_BOUNDARY, &
        CORE_PHASE_ACC_PREPARE,CORE_PHASE_ACC_FINALIZE
 #endif
   use tree_formation_module, only: m_tree_formation
@@ -241,8 +241,6 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
      call m_timer('grav force','start')
      call m_force_fine(pst,ilevel,icount)
 #ifdef CORE
-     call m_core_step(pst,core_state,CORE_PHASE_PREDICTOR,ilevel=ilevel)
-     ! Formation uses the clump catalogue the predictor has just built
      call m_core_step(pst,core_state,CORE_PHASE_FORMATION,ilevel=ilevel)
 #endif
   end if
@@ -543,9 +541,6 @@ recursive subroutine m_amr_step(pst,ilevel,icount,done)
         if(r%core_to_star)g%mass_sink_tot=g%mass_sink_tot-output_star%mass
 #endif
      endif
-#ifdef CORE
-     call m_core_step(pst,core_state,CORE_PHASE_STAR_RECONCILE)
-#endif
   endif
 
   !-----------------------

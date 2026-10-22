@@ -293,13 +293,13 @@ function worker_init(mdl) result(pst)
   call mdl_add_service(pst%s%mdl,MDL_STAR_FORMATION,         pst,C_FUNLOC(r_star_formation),1,2,"star_formation")
 #ifdef CORE
   call mdl_add_service(pst%s%mdl,MDL_CORE_TO_STAR_FORMATION, &
-       pst,C_FUNLOC(r_core_to_star_formation),1,4,"core_to_star_formation")
+       pst,C_FUNLOC(r_core_to_star_formation),1,2,"core_to_star_formation")
 #endif
   call mdl_add_service(pst%s%mdl,MDL_SINK_FORMATION,         pst,C_FUNLOC(r_sink_formation),1,2,"sink_formation")
   call mdl_add_service(pst%s%mdl,MDL_SINK_CLUMP,             pst,C_FUNLOC(r_sink_clump),1,2,"sink_clump")
 #ifdef CORE
   call mdl_add_service(pst%s%mdl,MDL_CORE_FORMATION, pst,C_FUNLOC(r_core_formation),1,2,"core_formation")
-  call mdl_add_service(pst%s%mdl,MDL_CORE_CLUMP,     pst,C_FUNLOC(r_core_clump),2,2,"core_clump")
+  call mdl_add_service(pst%s%mdl,MDL_CORE_CLUMP,     pst,C_FUNLOC(r_core_clump),1,2,"core_clump")
 #endif
   call mdl_add_service(pst%s%mdl,MDL_TREE_FORMATION,         pst,C_FUNLOC(r_tree_formation),1,2,"tree_formation")
   call mdl_add_service(pst%s%mdl,MDL_TREE_CLUMP,             pst,C_FUNLOC(r_tree_clump),1,2,"tree_clump")
