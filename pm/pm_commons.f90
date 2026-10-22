@@ -36,6 +36,7 @@ module pm_commons
      integer ,allocatable,dimension(:)     ::workp    ! Work space
      integer ,allocatable,dimension(:)     ::pid      ! Peak ID
      integer ,allocatable,dimension(:)     ::hid      ! Halo ID
+     integer ,allocatable,dimension(:)     ::nacc     ! Coarse step of last accretion
 
      ! Level dependent arrays
      integer ,allocatable,dimension(:)::headp    ! First particle in level

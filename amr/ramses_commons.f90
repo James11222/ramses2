@@ -426,6 +426,11 @@ subroutine open_part_file(s,p,filename,nskip,ilun)
      ! Levels
      ivar=ivar+1
      nskip(ivar+1)=nskip(ivar)+4*npart
+     ! Last accretion steps
+     if(allocated(p%nacc))then
+        ivar=ivar+1
+        nskip(ivar+1)=nskip(ivar)+4*npart
+     endif
      ! Identities
      ivar=ivar+1
      nskip(ivar+1)=nskip(ivar)+i8b*npart
@@ -570,6 +575,11 @@ subroutine close_part_file(s,p,filename,nskip,ilun)
      ! Levels
      ivar=ivar+1
      nskip(ivar)=nskip(ivar)+4*p%npart
+     ! Last accretion steps
+     if(allocated(p%nacc))then
+        ivar=ivar+1
+        nskip(ivar)=nskip(ivar)+4*p%npart
+     endif
      ! Identities
      ivar=ivar+1
      nskip(ivar)=nskip(ivar)+i8b*p%npart

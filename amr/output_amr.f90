@@ -756,6 +756,9 @@ subroutine output_header(r,g,p,filename)
      write(ilun,fmt)'internal_energy',rtype,1
   endif
   write(ilun,fmt)'level','i4',1
+  if(allocated(p%nacc))then
+     write(ilun,fmt)'accretion_step','i4',1
+  endif
   write(ilun,fmt)'birth_id',itype,1
   if(allocated(p%idm))then
      write(ilun,fmt)'merging_id',itype,1

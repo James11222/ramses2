@@ -512,6 +512,18 @@ subroutine input_part_restart(r,g,p,ncpu_file,npart_file,mpart_loc)
      end do
      iskip=iskip+4*int(npart_file(icpu),8)
 
+     ! Read last accretion step
+     if(allocated(p%nacc))then
+        ipos=iskip+4*int(istart-1,8)
+        read(10,POS=ipos)isp
+        ipart=ipart_old
+        do i=istart,iend
+           ipart=ipart+1
+           p%nacc(ipart)=isp(i)
+        end do
+        iskip=iskip+4*int(npart_file(icpu),8)
+     endif
+
      deallocate(isp)
 
      allocate(isp8(istart:iend))

@@ -1247,6 +1247,12 @@ subroutine balance_part(s,p,ilevel)
         levelp_tmp=p%levelp(ipart)
         p%levelp(ipart)=p%levelp(jpart)
         p%levelp(jpart)=levelp_tmp
+        ! Swap last accretion steps
+        if(allocated(p%nacc))then
+           levelp_tmp=p%nacc(ipart)
+           p%nacc(ipart)=p%nacc(jpart)
+           p%nacc(jpart)=levelp_tmp
+        endif
         ! Swap ids
         idp_tmp=p%idp(ipart)
         p%idp(ipart)=p%idp(jpart)
@@ -1817,6 +1823,49 @@ subroutine balance_part(s,p,ilevel)
 
   ! Wait for full completion of sends
   call MPI_WAITALL(countsend,reqsend,statuses,info)
+
+  !-------------------------
+  ! Swap last accretion steps
+  !-------------------------
+  if(allocated(p%nacc))then
+
+     countrecv=0
+     do icpu=1,g%ncpu
+        nbuffer=recv_cnt(icpu)
+        if(nbuffer>0)then
+           countrecv=countrecv+1
+           istart=recv_oft(icpu)+1
+           call MPI_IRECV(i_recv_buf(istart),nbuffer,MPI_INTEGER,icpu-1,tag,MPI_COMM_WORLD,reqrecv(countrecv),info)
+        endif
+     end do
+
+     do i=1,send_cnt_tot
+        ipart=p%headp(ilevel)-1+count_loc+i
+        i_send_buf(i)=p%nacc(ipart)
+     end do
+
+     countsend=0
+     do icpu=1,g%ncpu
+        nbuffer=send_cnt(icpu)
+        if(nbuffer>0) then
+           countsend=countsend+1
+           istart=send_oft(icpu)+1
+           call MPI_ISEND(i_send_buf(istart),nbuffer,MPI_INTEGER,icpu-1,tag,MPI_COMM_WORLD,reqsend(countsend),info)
+        end if
+     end do
+
+     ! Wait for full completion of receives
+     call MPI_WAITALL(countrecv,reqrecv,statuses,info)
+
+     do i=1,recv_cnt_tot
+        ipart=p%headp(ilevel)-1+count_loc+i
+        p%nacc(ipart)=i_recv_buf(i)
+     end do
+
+     ! Wait for full completion of sends
+     call MPI_WAITALL(countsend,reqsend,statuses,info)
+
+  endif
 
   deallocate(i_send_buf,i_recv_buf)
 

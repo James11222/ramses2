@@ -1560,6 +1560,12 @@ subroutine split_part(s,p,ilevel)
         levelp_tmp=p%levelp(ipart)
         p%levelp(ipart)=p%levelp(jpart)
         p%levelp(jpart)=levelp_tmp
+        ! Swap last accretion steps
+        if(allocated(p%nacc))then
+           levelp_tmp=p%nacc(ipart)
+           p%nacc(ipart)=p%nacc(jpart)
+           p%nacc(jpart)=levelp_tmp
+        endif
         ! Swap ids
         idp_tmp=p%idp(ipart)
         p%idp(ipart)=p%idp(jpart)
