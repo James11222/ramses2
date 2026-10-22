@@ -103,7 +103,13 @@ contains
     do_profile = (sim%r%clump_finder .and. sim%r%saddle_threshold > 0 .and. &
          & sim%r%part .and. sim%r%rho_type_clump == 1)
 
-    ntestmax = sim%m%ngridmax
+    ! Test cells are scanned with gpu_scan: use the size of the scan buffers,
+    ! i.e. the largest capacity requested by gpu_allocate_amr/part/star/sink/tree
+    ntestmax = sim%m%ngridmax + sim%m%ncachemax
+    if (sim%r%part) ntestmax = max(ntestmax, sim%r%npartmax)
+    if (sim%r%star) ntestmax = max(ntestmax, sim%r%nstarmax)
+    if (sim%r%sink) ntestmax = max(ntestmax, sim%r%nsinkmax)
+    if (sim%r%tree) ntestmax = max(ntestmax, sim%r%ntreemax)
     nclumpmax = sim%m%ngridmax/10
 
     ! Allocate test cell arrays
@@ -582,7 +588,7 @@ contains
     call gpu_scan(prefix_sum, 1, num_octs, total_test_d)
     ntest = total_test_d
     if (ntest < 0 .or. ntest > size(grid_d)) then
-       write(*,*) 'gpu_collect_test: cells above density threshold exceed ngridmax (', size(grid_d), ')'
+       write(*,*) 'gpu_collect_test: cells above density threshold exceed ntestmax (', size(grid_d), ')'
        write(*,*) 'Increase density_threshold (clump finder) or sink_density_threshold (sink formation)'
        stop
     endif
