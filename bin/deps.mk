@@ -17,6 +17,15 @@ cooling_fine.o: amr_commons.o amr_parameters.o constants.o cooling_module.o cool
 cooling_module.o: constants.o
 cooling_module_ism.o: constants.o
 coolrates_module.o: amr_commons.o amr_parameters.o constants.o hydro_parameters.o rt_parameters.o
+core_clump_output.o: amr_parameters.o mdl.o mdl_commons.o output_clump.o ramses_commons.o
+core_evolution.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o constants.o hydro_parameters.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o ramses_commons.o sink_evolution.o
+core_formation.o: amr_commons.o amr_parameters.o cache.o cache_commons.o clfind_commons.o clump_finder.o clump_merger.o constants.o hydro_parameters.o mdl.o mdl_commons.o pm_commons.o ramses_commons.o
+core_merger.o: amr_commons.o amr_parameters.o cache.o constants.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o ramses_commons.o
+core_params.o: ramses_commons.o
+core_retirement.o: amr_commons.o amr_parameters.o mdl.o mdl_commons.o pm_commons.o ramses_commons.o star_formation_common.o
+core_sf_support.o: amr_commons.o
+core_step.o: core_evolution.o core_formation.o core_merger.o core_retirement.o ramses_commons.o rho_fine.o
+core_to_star_formation.o: amr_commons.o amr_parameters.o constants.o core_sf_support.o mdl.o mdl_commons.o pm_commons.o ramses_commons.o star_formation_common.o
 courant_fine.o: amr_commons.o amr_parameters.o hydro_parameters.o mdl.o mdl_commons.o ramses_commons.o
 cr_boundana.o: amr_commons.o amr_parameters.o cr_parameters.o
 cr_commons.o: amr_parameters.o cr_parameters.o hydro_parameters.o oct_commons.o
@@ -33,7 +42,7 @@ cr_upload.o: amr_commons.o amr_parameters.o cache.o cache_commons.o cr_parameter
 cross_sections_module.o: constants.o
 domain_hilbert.o: amr_parameters.o hilbert.o
 feedback.o: amr_parameters.o boundaries.o cache.o cache_commons.o cr_parameters.o godunov_fine.o hilbert.o hydro_parameters.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o ramses_commons.o
-flag_utils.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o hilbert.o hydro_flag.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o pm_parameters.o ramses_commons.o rt_flag.o smooth.o
+flag_utils.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o hilbert.o hydro_flag.o marshal.o mdl.o mdl_commons.o nbors_utils.o pm_commons.o ramses_commons.o rt_flag.o smooth.o
 force_fine.o: multigrid_fine_coarse.o
 gadgetreadfile.o: amr_parameters.o
 godunov_fine.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o hydro_commons.o hydro_parameters.o marshal.o mdl.o mdl_commons.o nbors_utils.o ramses_commons.o
@@ -125,6 +134,7 @@ sink_merger.o: amr_commons.o amr_parameters.o cache.o cache_commons.o constants.
 smooth.o: amr_parameters.o boundaries.o cache.o cache_commons.o marshal.o mdl.o mdl_commons.o nbors_utils.o ramses_commons.o
 source_hydro_fine.o: amr_parameters.o boundaries.o cache.o cache_commons.o hydro_flag.o hydro_parameters.o mdl.o mdl_commons.o nbors_utils.o ramses_commons.o
 star_formation.o: amr_commons.o amr_parameters.o constants.o hydro_parameters.o input_hydro_condinit.o mdl.o mdl_commons.o pm_commons.o ramses_commons.o rngstream.o rt_spectra.o
+star_formation_common.o: ramses_commons.o rt_spectra.o
 synchro_hydro_fine.o: amr_commons.o amr_parameters.o mdl.o mdl_commons.o ramses_commons.o
 task_manager.o: amr_commons.o amr_parameters.o cache.o cache_commons.o call_back.o clfind_commons.o clump_finder.o clump_merger.o cooling_fine.o courant_fine.o cr_godunov_fine.o cr_init_flow_fine.o cr_input_condinit.o cr_source_terms.o cr_upload.o feedback.o flag_utils.o godunov_fine.o hash.o hilbert.o init_amr.o init_cr.o init_hydro.o init_part.o init_refine_basegrid.o init_refine_ramses.o init_refine_restart.o init_rt.o init_time.o init_xion.o input_hydro_condinit.o input_hydro_gadget.o input_hydro_grafic.o input_part.o input_part_ascii.o input_part_gadget.o input_part_grafic.o input_part_ramses.o input_part_restart.o input_part_zoom.o interpol_phi.o lightcone.o load_balance.o mdl.o mdl_commons.o move_fine.o movie.o newdt_fine.o output_amr.o output_clump.o output_cr.o output_hydro.o output_part.o output_poisson.o output_rt.o ramses_commons.o read_params.o refine_utils.o rho_fine.o rt_godunov_fine.o rt_init_flow_fine.o rt_input_condinit.o rt_star_feedback.o rt_upload.o sink_evolution.o sink_formation.o sink_merger.o smooth.o source_hydro_fine.o star_formation.o synchro_hydro_fine.o tree_formation.o turb_driving.o turb_hydro.o turb_init.o turb_update.o update_time.o upload.o
 test_cooling.o: amr_commons.o amr_parameters.o constants.o cooling_module.o coolrates_module.o hydro_parameters.o init_neq_chem.o neq_cooling_module.o rt_parameters.o
@@ -226,10 +236,25 @@ turb_update.o: gpu_manager.o
 upload.o: gpu_runner.o
 endif
 
+ifeq ($(CORE),1)
+amr_step.o: core_step.o core_to_star_formation.o
+flag_utils.o: pm_parameters.o
+init_part.o: amr_commons.o amr_parameters.o pm_commons.o pm_parameters.o
+input_part_ascii.o: amr_commons.o amr_parameters.o mdl.o mdl_commons.o pm_commons.o ramses_commons.o
+input_part_ramses.o: pm_parameters.o
+input_part_restart.o: pm_parameters.o
+read_params.o: core_params.o
+task_manager.o: core_clump_output.o core_evolution.o core_formation.o core_merger.o core_retirement.o core_to_star_formation.o input_part_ascii.o
+endif
+
 ifeq ($(DO_CR),1)
 cr_godunov_fine.o: cr_flux_module.o
 cr_source_terms.o: cr_flux_module.o
 refine_utils.o: cr_parameters.o
+endif
+
+ifeq ($(DO_RT),1)
+core_formation.o: constants.o rt_parameters.o
 endif
 
 ifeq ($(DO_RTZ),0)
@@ -256,6 +281,7 @@ endif
 ifeq ($(GRAV),1)
 amr_step.o: force_fine.o multigrid_fine_commons.o phi_fine_cg.o
 clump_finder.o: rho_fine.o
+core_formation.o: core_clump_output.o rho_fine.o
 force_fine.o: amr_commons.o amr_parameters.o boundaries.o cache.o cache_commons.o interpol_phi.o mdl.o mdl_commons.o nbors_utils.o phi_fine_cg.o ramses_commons.o
 init_refine_adaptive.o: rho_fine.o
 init_refine_basegrid.o: rho_fine.o

@@ -22,7 +22,7 @@ from collections import defaultdict
 SRCDIRS = [
     'amr', 'hydro', 'pm', 'poisson', 'cooling', 'rt', 'gpu',
     'turb', 'clump', 'sink', 'star', 'feedback', 'mdl1', 'lightcone',
-    'metal', 'cr',
+    'metal', 'cr', 'core',
 ]
 EXTS = ('.f90', '.cuf')
 
@@ -40,6 +40,7 @@ MACRO_TO_MAKE = {
     'DO_RTZ': 'DO_RTZ',
     'TURB':   'TURB',
     'DO_CR':  'DO_CR',
+    'CORE':   'CORE',
 }
 
 # Macros whose guard is a full literal ifeq string (not the $(VAR),1 pattern)
