@@ -44,7 +44,7 @@ module timer_module
   implicit none
   integer,            parameter         :: mtimer=200       ! max nr of timers
   real(kind=8),       dimension(mtimer) :: start, time
-  integer                               :: ntimer=0, itimer
+  integer                               :: ntimer=0, itimer=0
   character(len=72), dimension(mtimer)  :: labels
 contains
   subroutine findit (label)
@@ -104,7 +104,7 @@ subroutine m_output_timer(write_file,filename)
   character(len=*)::filename
   character(len=flen)::fileloc
   logical::write_file
-  integer::ilun
+  integer::ilun,jtimer
   if(write_file)then
      ilun=11
      fileloc=TRIM(filename) ! Open file for timing info
@@ -114,12 +114,12 @@ subroutine m_output_timer(write_file,filename)
   endif
   write (ilun,'(/a,i7,a)') '     seconds         %    STEP'
   total = 1e-9
-  do itimer = 1,ntimer
-     total = total + time(itimer)
+  do jtimer = 1,ntimer
+     total = total + time(jtimer)
   end do
-  do itimer = 1,ntimer
-     if (time(itimer)/total >= 0.001) write (ilun,'(f12.3,4x,f6.1,4x,a24)') &
-          time(itimer), 100.*time(itimer)/total,labels(itimer)
+  do jtimer = 1,ntimer
+     if (time(jtimer)/total >= 0.001) write (ilun,'(f12.3,4x,f6.1,4x,a24)') &
+          time(jtimer), 100.*time(jtimer)/total,labels(jtimer)
   end do
   write (ilun,'(f12.3,4x,f6.1,4x,a)') total, 100., 'TOTAL'
   write(ilun,*)

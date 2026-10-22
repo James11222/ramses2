@@ -48,6 +48,7 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
   ! Output clumps properties to file
   !---------------------------------
   if(create_output.and.pst%s%c%npeak_tot>0)then
+     call m_timer('clump - output','start')
      call title(g%ifout,nchar)
      filedir='output_'//TRIM(nchar)//'/'
      if(r%clump_only)then
@@ -130,6 +131,7 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
 #endif
         call r_output_part(pst,input_array,flen/4,dummy,0)
      endif
+     call m_timer('clump','start')
   endif
 
   !------------------------------------------
