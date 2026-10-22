@@ -632,6 +632,17 @@ def rd_hydro(nout,**kwargs):
 
     return hydro
 
+def rd_hydro_fields(filename):
+    """Return the variable names listed in a <prefix>_header.txt file
+    (hydro, grav, rt or cr), in file order."""
+    with open(filename) as f:
+        lines = [line.strip() for line in f]
+    fields = []
+    for line in lines:
+        if line.startswith("variable #"):
+            fields.append(line.split(":",1)[1].strip())
+    return fields
+
 def mk_image(x,y,dx,var):
     """
     Function to make image from cell data
@@ -829,6 +840,13 @@ class Cell:
         self.u = np.empty(shape=(nnvar,0))
         self.dx = np.empty(shape=(0))
         self.level = np.empty(shape=(0),dtype=np.int8)
+        self.fields = []
+
+    def set_fields(self,fields):
+        # Each field is a view of its row of u
+        self.fields = list(fields)
+        for ivar, name in enumerate(self.fields):
+            setattr(self,name,self.u[ivar])
 
 def rd_cell(nout,**kwargs):
     """This function reads RAMSES AMR and hydro files (unformatted Fortran binary)
@@ -853,6 +871,9 @@ def rd_cell(nout,**kwargs):
             c.u: hydro variables in each cell. For example, c.u[0] gives the gas density as a numpy array.
             c.dx: array containing the individual AMR cell sizes.
             c.level: refinement levels of cells.
+            c.fields: list of the variable names read from <prefix>_header.txt.
+        Each variable is also an attribute named after its field and is a view of its row of c.u,
+        for example c.density is c.u[0] and c.velocity_x is c.u[1].
 
     Example:
         import ramses as ram
@@ -863,6 +884,8 @@ def rd_cell(nout,**kwargs):
     """
 
     path = kwargs.get("path","./")
+    prefix = kwargs.get("prefix","hydro")
+    backup = kwargs.get("backup",False)
     center = kwargs.get("center")
     radius = kwargs.get("radius")
     geom = kwargs.get("geom","circle")
@@ -874,6 +897,15 @@ def rd_cell(nout,**kwargs):
     ndim = a[0].ndim
     nvar = h[0].nvar
     boxlen = a[0].boxlen
+
+    car1 = str(nout).zfill(5)
+    if(backup):
+        outdir = path+"/backup_"+car1
+    else:
+        outdir = path+"/output_"+car1
+    fields = rd_hydro_fields(outdir+"/"+prefix+"_header.txt")
+    if(len(fields) != nvar):
+        raise ValueError(prefix+"_header.txt lists "+str(len(fields))+" variables, the data has nvar="+str(nvar))
 
     offset = np.zeros([ndim,2**ndim])
     if (ndim == 1):
@@ -954,6 +986,8 @@ def rd_cell(nout,**kwargs):
         for ivar in range(0,nvar):
             c.u[ivar]=c.u[ivar,ind]
 
+    c.set_fields(fields)
+
     return c
 
 def save_cell(c,filename):
@@ -966,6 +1000,7 @@ def save_cell(c,filename):
         np.save(f,c.x)
         np.save(f,c.u)
         np.save(f,c.level)
+        np.save(f,np.array(c.fields))
 
 def load_cell(filename):
 
@@ -977,10 +1012,11 @@ def load_cell(filename):
         c.ncell = ncell
         c.ndim = ndim
         c.nvar = nvar
-        c.dx = np.append(c.dx,np.load(f))
-        c.x  = np.append(c.x, np.load(f),axis=1)
-        c.u  = np.append(c.u, np.load(f),axis=1)
-        c.level  = np.append(c.level, np.load(f),axis=1)
+        c.dx = np.load(f)
+        c.x  = np.load(f)
+        c.u  = np.load(f)
+        c.level = np.load(f)
+        c.set_fields([str(name) for name in np.load(f)])
 
     return c
 

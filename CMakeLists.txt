@@ -518,7 +518,7 @@ set(fortran_files
   lightcone/lightcone_test.f90
   lightcone/lightcone.f90
 
-  # MDL (replaced by mdl2/ when MDL2=ON)
+  # MDL
   mdl1/mdl.f90
 
   # Generated build-info stubs
@@ -764,28 +764,6 @@ if(NOT PATCH STREQUAL "")
         list(APPEND _patched_files "${_new}")
     endforeach()
     set(fortran_files ${_patched_files})
-endif()
-
-# =============================================================================
-# MDL2 (optional, needs mdl2/ sub-tree present)
-# =============================================================================
-if(EXISTS ${CMAKE_SOURCE_DIR}/mdl2)
-    set(MDL2 ON  CACHE BOOL "Enable the MDL2 version of RAMSES")
-else()
-    set(MDL2 OFF CACHE BOOL "Enable the MDL2 version of RAMSES")
-endif()
-
-if(MDL2)
-    enable_language(CXX)
-    set_target_properties(${EXEC} PROPERTIES
-        CXX_STANDARD 14 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
-    add_subdirectory(mdl2)
-    # Replace mdl1 with mdl2
-    list(REMOVE_ITEM fortran_files mdl1/mdl.f90)
-    list(APPEND fortran_files mdl2/mdl.f90 amr/mdlcache.f90)
-    target_sources(${EXEC} PRIVATE amr/mdlcache.cxx)
-    target_link_libraries(${EXEC} PRIVATE mdl2)
-    target_compile_definitions(${EXEC} PRIVATE MDL2)
 endif()
 
 # =============================================================================
