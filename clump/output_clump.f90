@@ -352,10 +352,10 @@ subroutine file_descriptor_clump(r,filename)
   write(ilun,'("nvar        =",I11)')3
 
   ivar=1
-  write(ilun,'("variable #",I2,": halo patch ID")')ivar
+  write(ilun,'("variable #",I2,": halo_patch_id")')ivar
 
   ivar=2
-  write(ilun,'("variable #",I2,": peak patch ID")')ivar
+  write(ilun,'("variable #",I2,": peak_patch_id")')ivar
 
   ivar=3
   write(ilun,'("variable #",I2,": density")')ivar

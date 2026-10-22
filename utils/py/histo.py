@@ -65,7 +65,7 @@ else:
     path=path+"/"
 if prefix=="hydro":
     isort=0
-if prefix=="peak":
+if prefix=="peak_grid":
     isort=1
 if prefix=="grav":
     isort=0

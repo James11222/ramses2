@@ -148,7 +148,7 @@ subroutine file_descriptor_cr(r,filename)
   write(ilun,'("nvar        =",I11)')ncrgrp*ndim
   do igrp = 1, ncrgrp
      do idim = 1, ndim
-        write(ilun,'("variable #",I2,": cr_flux_", i0.2, "_", a)')1+idim+(igrp-1)*(ndim+1), igrp, dim_keys(idim)
+        write(ilun,'("variable #",I2,": cr_flux_", i0.2, "_", a)')idim+(igrp-1)*ndim, igrp, dim_keys(idim)
      end do
   end do
   close(ilun)
