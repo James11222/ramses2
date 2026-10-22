@@ -10,11 +10,6 @@ module amr_commons
   use hash
   use domain_m
 
-#ifdef CORE
-  ! Core ids a cell keeps for the core merger's candidate search
-  integer,parameter::ncore_marker_slot=4
-#endif
-
   type multipole_t
     real(kind=8),dimension(1:ndim+1)::q
   end type multipole_t
