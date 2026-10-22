@@ -1350,10 +1350,6 @@ contains
       stop
    endif
 
-   if(npart_new > 0 .or. nstar_new > 0)then
-      write(*,*)'New star=',mstar_loc, npart_new
-   endif
-
    if (npart_new > 0) then
 
       head_part = sim%star%npart + 1
