@@ -48,7 +48,7 @@ module clfind_commons
        real(kind=8),allocatable,dimension(:) :: grav_term ! Gravitational virial term
        real(kind=8),allocatable,dimension(:) :: rad_term ! Radiation force virial term
        real(kind=8),allocatable,dimension(:) :: virial_ratio ! support / abs(grav_term)
-       logical,allocatable,dimension(:) :: bound ! True when virial_ratio is below the configured threshold
+       logical,allocatable,dimension(:) :: bound ! True when the kinetic and thermal terms are each below abs(grav_term)
        logical,allocatable,dimension(:) :: contracting ! True when dI/dt < 0 for the clump gas
 #endif
        real(kind=8),allocatable,dimension(:) :: particle_mass ! Clump mass using directly dark matter particles

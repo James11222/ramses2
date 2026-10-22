@@ -230,6 +230,16 @@ subroutine output_part(s,p,filename)
   write(ilun,POS=nskip(ivar))
   write(ilun)ll
 
+  ! Write last accretion step
+  if(allocated(p%nacc))then
+     do i=1,p%npart
+        ll(i)=p%nacc(i)
+     end do
+     ivar=ivar+1
+     write(ilun,POS=nskip(ivar))
+     write(ilun)ll
+  endif
+
   deallocate(ll)
 
   allocate(ii8(1:p%npart))
@@ -412,6 +422,14 @@ subroutine backup_part(r,g,p,filename)
      ll(i)=p%levelp(i)
   end do
   write(ilun)ll
+
+  ! Write last accretion step
+  if(allocated(p%nacc))then
+     do i=1,p%npart
+        ll(i)=p%nacc(i)
+     end do
+     write(ilun)ll
+  endif
 
   deallocate(ll)
 

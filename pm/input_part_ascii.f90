@@ -800,11 +800,13 @@ subroutine input_core_ascii(mdl,r,g,p,npart_tot)
      p%tailp(r%levelmin-1)=0
   endif
 
-  ! Fields the file does not give: zero acceleration and metallicity, and
-  ! the internal energy of gas at the sound speed floor
+  ! Fields the file does not give: zero acceleration and metallicity, the
+  ! internal energy of gas at the sound speed floor, and accretion counted
+  ! from step 0
   if(allocated(p%fp))p%fp(1:p%npart,1:ndim)=0d0
   if(allocated(p%zp))p%zp(1:p%npart)=0d0
   if(allocated(p%up))p%up(1:p%npart)=r%smallc**2/(r%gamma-1d0)
+  if(allocated(p%nacc))p%nacc(1:p%npart)=0
 
 end subroutine input_core_ascii
 #endif

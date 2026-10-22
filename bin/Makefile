@@ -13,6 +13,7 @@ MHD = 0
 DO_RT = 0
 DO_CR = 0
 DO_RTZ = 0
+CORE = 0
 INIT =
 UNITS =
 NENER = 0
@@ -115,6 +116,9 @@ ifeq ($(DO_RT),1)
 endif
 ifeq ($(DO_RTZ),1)
    DEFINES += -DDO_RTZ
+endif
+ifeq ($(CORE),1)
+   DEFINES += -DCORE
 endif
 ifneq ($(NVECTOR),32)
    DEFINES += -DNVECTOR=$(NVECTOR)
@@ -289,7 +293,7 @@ endif
 LIBS += $(LIBMPI) $(LIBFFTW)
 #############################################################################
 # Sources directories are searched in this exact order
-VPATH = $(PATCH):$(GPU_PATH):$(METAL_PATH):../feedback:../sink:../star:../cooling:../turb:../hydro:../pm:../poisson:../amr:../clump:../mdl1:../rt:../cr:../lightcone
+VPATH = $(PATCH):$(GPU_PATH):$(METAL_PATH):../feedback:../sink:../star:../cooling:../turb:../hydro:../pm:../poisson:../amr:../clump:../mdl1:../rt:../cr:../lightcone:../core
 #############################################################################
 # Modules
 MODOBJ = amr_parameters.o hydro_parameters.o rt_parameters.o cr_parameters.o oct_commons.o \
@@ -340,6 +344,10 @@ MODOBJ +=  multigrid_fine_coarse.o rho_fine.o upload.o init_xion.o \
 	 rt_star_feedback.o sink_formation.o tree_formation.o \
 	 sink_evolution.o sink_merger.o task_manager.o rt_step.o cr_step.o amr_step.o \
 	 adaptive_loop.o write_gitinfo.o
+ifeq ($(CORE),1)
+   MODOBJ += core_params.o core_sf_support.o star_formation_common.o core_to_star_formation.o \
+      core_clump_output.o core_formation.o core_evolution.o core_retirement.o core_merger.o core_step.o
+endif
 #############################################################################
 ramses:	$(MODOBJ) ramses.o $(METAL_METALLIB)
 	$(F90) $(FFLAGS) $(MODOBJ) ramses.o -o $(EXEC)$(NDIM)d $(LIBS)

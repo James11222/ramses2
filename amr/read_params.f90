@@ -1100,7 +1100,7 @@ subroutine m_read_params(pst)
   endif
 
 #ifdef CORE
-  call read_core_params(1,s,hydro,nstarmax,pic,sf_model,star,nml_ok)
+  call read_core_params(1,s,star,nml_ok)
 #endif
   close(1)
 

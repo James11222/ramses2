@@ -471,6 +471,18 @@ subroutine input_part_ramses(r,g,p,ncpu_file,npart_file,mpart_loc)
      end do
      iskip=iskip+4*npart_file(icpu)
 
+     ! Read last accretion step
+     if(allocated(p%nacc))then
+        ipos=iskip+4*(istart-1)
+        read(10,POS=ipos)isp
+        ipart=ipart_old
+        do i=istart,iend
+           ipart=ipart+1
+           p%nacc(ipart)=isp(i)
+        end do
+        iskip=iskip+4*npart_file(icpu)
+     endif
+
      deallocate(isp)
 
      allocate(isp8(istart:iend))

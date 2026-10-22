@@ -233,7 +233,8 @@ subroutine init_core(r,g,p)
   allocate(p%up    (r%ncoremax))
   allocate(p%levelp(r%ncoremax))
   allocate(p%idp   (r%ncoremax))
-  p%nvaralloc=4*ndim+6
+  allocate(p%nacc  (r%ncoremax))
+  p%nvaralloc=4*ndim+7
 #ifdef OUTPUT_PARTICLE_POTENTIAL
   allocate(p%phip  (r%ncoremax))
   p%nvaralloc=p%nvaralloc+1
