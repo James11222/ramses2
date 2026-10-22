@@ -46,6 +46,7 @@ endif()
 set(NDIM     3    CACHE STRING "Number of dimensions (1, 2, or 3)")
 set(NVECTOR  32   CACHE STRING "SIMD vector length")
 set(NHILBERT 1    CACHE STRING "Hilbert key length exponent")
+set(NSUBGRID 1    CACHE STRING "CUDA subgrid size in octs per dimension (NVHPC: 1, 2 or 4; MHD: 1 or 2)")
 set(NPRE     8    CACHE STRING "Floating-point precision in bytes")
 if(COMPILER STREQUAL "METAL")
     # Apple GPU has no float64; force single precision regardless of user setting.
@@ -55,10 +56,11 @@ set(NENER    0    CACHE STRING "Number of non-thermal energy variables")
 set(NMETAL   0    CACHE STRING "Number of metal species")
 set(NPSCAL   0    CACHE STRING "Number of passive scalar tracers")
 set(NION     0    CACHE STRING "Number of ionisation species (auto-computed when RTZ=ON)")
-set(NRTGRP   0    CACHE STRING "Number of RT photon groups (used when DO_RT=ON)")
+set(NRTGRP   1    CACHE STRING "Number of RT photon groups (used when DO_RT=ON)")
 set(NCRGRP   1    CACHE STRING "Number of CR groups (used when DO_CR=ON)")
 set(UNITS    ""   CACHE STRING "Unit system (e.g. COSMO, COEUR; empty = default)")
 set(INIT     ""   CACHE STRING "Initial condition module (e.g. LOOP, COEUR; empty = default)")
+set(PATCH    ""   CACHE STRING "Patch directories (colon-separated, relative to the source tree) whose files replace the same-name sources")
 
 # RTZ per-species ion counts (only relevant when DO_RTZ=ON)
 set(N_HYDROGEN_IONS  0  CACHE STRING "RTZ: number of hydrogen  ion states")
@@ -82,6 +84,7 @@ option(DO_RTZ "Activate RTZ (metal-line RT) solver"    OFF)
 option(DO_CR  "Activate cosmic rays"                   OFF)
 option(TURB   "Activate turbulence driving"            OFF)
 option(TRCFLX "Activate tracer-flux advection"         OFF)
+option(CORE   "Activate core particles (needs NDIM=3, HYDRO)" OFF)
 
 # Build options
 option(DEBUG        "Enable debug compilation flags"               OFF)
@@ -94,8 +97,13 @@ option(CUB_SORT_REFINE "Use CUB radix sort for refine (NVHPC)"     ON)
 option(CUB_SCAN_REFINE "Use CUB inclusive scan for refine (NVHPC)" ON)
 
 set(CUDA_ARCH "sm_80" CACHE STRING "CUDA target architecture (e.g. sm_80, sm_90)")
+set(FFTW_DIR  ""      CACHE PATH   "FFTW3 install prefix (used when TURB=ON; empty = system search)")
 
 set(EXEC ramses${NDIM}d)
+
+if(COMPILER STREQUAL "METAL" AND MPI)
+    message(FATAL_ERROR "COMPILER=METAL does not support MPI: set MPI=OFF")
+endif()
 
 # =============================================================================
 # Derived variables
@@ -114,7 +122,7 @@ endif()
 # NVAR = 5 (hydro) + NENER + NPSCAL + NMETAL + NION
 math(EXPR NVAR "5 + ${NENER} + ${NPSCAL} + ${NMETAL} + ${NION}")
 
-cmake_print_variables(COMPILER NDIM NVAR NENER NION NRTGRP NCRGRP UNITS INIT HYDRO GRAV MHD DO_RT DO_RTZ DO_CR TURB)
+cmake_print_variables(COMPILER NDIM NVAR NENER NION NRTGRP NCRGRP UNITS INIT HYDRO GRAV MHD DO_RT DO_RTZ DO_CR TURB CORE)
 
 # =============================================================================
 # Preprocessor defines
@@ -132,6 +140,9 @@ if(NENER GREATER 0)
 endif()
 if(NION GREATER 0)
     list(APPEND defines NION=${NION})
+endif()
+if(NOT NSUBGRID EQUAL 1)
+    list(APPEND defines NSUBGRID=${NSUBGRID})
 endif()
 if(NOT UNITS STREQUAL "")
     list(APPEND defines UNITS=${UNITS})
@@ -175,6 +186,9 @@ endif()
 if(TRCFLX)
     list(APPEND defines TRCFLX)
 endif()
+if(CORE)
+    list(APPEND defines CORE)
+endif()
 if(NOT MPI)
     list(APPEND defines WITHOUTMPI)
 endif()
@@ -200,6 +214,16 @@ if(MPI)
 endif()
 
 # =============================================================================
+# FFTW (turbulence driving)
+# =============================================================================
+if(TURB)
+    find_path(FFTW_INCLUDE_DIR fftw3.f HINTS ${FFTW_DIR} PATH_SUFFIXES include REQUIRED)
+    find_library(FFTW_LIBRARY fftw3 HINTS ${FFTW_DIR} PATH_SUFFIXES lib lib64 REQUIRED)
+    target_include_directories(${EXEC} PRIVATE ${FFTW_INCLUDE_DIR})
+    target_link_libraries(${EXEC} PRIVATE ${FFTW_LIBRARY})
+endif()
+
+# =============================================================================
 # Compiler flags
 # =============================================================================
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
@@ -207,7 +231,10 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_Fortran_COMPILER_VERSION VERSION_GREATER_EQUAL 10)
         list(APPEND fort_flags -fallow-argument-mismatch)
     endif()
-    if(DEBUG)
+    if(DEBUG AND COMPILER STREQUAL "METAL")
+        # Same as bin/Makefile: no FPE traps or NaN init for Metal
+        list(APPEND fort_flags -O0 -fcheck=bounds -g -fbacktrace -Wall)
+    elseif(DEBUG)
         list(APPEND fort_flags
             -O0 -g -fcheck=bounds -fbacktrace
             -ffpe-trap=zero,overflow,invalid -finit-real=nan
@@ -250,7 +277,7 @@ elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
     if(PAPER)
         list(APPEND defines PAPER)
     endif()
-    set(fort_flags -cpp -gpu=${CUDA_ARCH},fastmath -cuda -cudalib=nvtx,curand -Mfreeform)
+    set(fort_flags -cpp -gpu=${CUDA_ARCH} -cuda -cudalib=nvtx,curand -Mfreeform)
     if(DEBUG)
         list(APPEND fort_flags
             -O0 -traceback -g
@@ -263,7 +290,7 @@ elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
         list(APPEND fort_flags -gpu=lineinfo,ptxinfo -Minstrument -traceback -gopt)
     endif()
     # Link flags mirror LIBS in the Makefile
-    set(nvhpc_link_flags -gpu=${CUDA_ARCH},fastmath -cuda -cudalib=nvtx,curand -lstdc++)
+    set(nvhpc_link_flags -gpu=${CUDA_ARCH} -cuda -cudalib=nvtx,curand -lstdc++)
     if(CUDA_PROFILE)
         list(APPEND nvhpc_link_flags -gpu=lineinfo,ptxinfo -Minstrument -traceback -gopt)
     endif()
@@ -284,13 +311,17 @@ set_target_properties(${EXEC} PROPERTIES
 # =============================================================================
 # Generated source files (git info, build command, patch)
 # =============================================================================
-add_custom_command(
-    OUTPUT  ${CMAKE_BINARY_DIR}/write_gitinfo.f90
+# Regenerated at every build, like write_gitinfo.o: FORCE in bin/Makefile
+list(JOIN defines " -D" _build_defines)
+add_custom_target(gitinfo ALL
     COMMAND ${CMAKE_SOURCE_DIR}/utils/scripts/cr_write_gitinfo.sh
             ${CMAKE_BINARY_DIR}/write_gitinfo.f90
+            "${PATCH}" "cmake -D${_build_defines}"
+    BYPRODUCTS ${CMAKE_BINARY_DIR}/write_gitinfo.f90
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     VERBATIM
 )
+add_dependencies(${EXEC} gitinfo)
 add_custom_command(
     OUTPUT  ${CMAKE_BINARY_DIR}/write_makefile.f90
     COMMAND ${CMAKE_SOURCE_DIR}/utils/scripts/cr_write_makefile.sh
@@ -506,6 +537,22 @@ else()
     list(APPEND fortran_files cooling/neq_cooling_module.f90)
 endif()
 
+# Core particles
+if(CORE)
+    list(APPEND fortran_files
+        core/core_params.f90
+        core/core_sf_support.f90
+        core/star_formation_common.f90
+        core/core_to_star_formation.f90
+        core/core_clump_output.f90
+        core/core_formation.f90
+        core/core_evolution.f90
+        core/core_retirement.f90
+        core/core_merger.f90
+        core/core_step.f90
+    )
+endif()
+
 # =============================================================================
 # NVHPC / GPU sources
 # =============================================================================
@@ -527,6 +574,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
         gpu/gpu_flag.cuf
         gpu/gpu_runner.cuf
         gpu/gpu_clump.cuf
+        gpu/gpu_sink.cuf
         gpu/gpu_part.cuf
     )
     list(APPEND fortran_files ${gpu_cuf_files} gpu/gpu_manager.cuf)
@@ -611,6 +659,9 @@ if(COMPILER STREQUAL "METAL")
     if(GRAV)
         list(APPEND _metal_bridge_flags -DGRAV)
     endif()
+    if(DEBUG)
+        list(APPEND _metal_bridge_flags -g -O0)
+    endif()
 
     # ObjC++ bridge: compiled explicitly with xcrun clang++, same pattern as
     # the CUB wrappers in the NVHPC block — avoids relying on CMake's CXX
@@ -691,6 +742,31 @@ if(COMPILER STREQUAL "METAL")
 endif()
 
 # =============================================================================
+# Patch directories: a file in a patch directory replaces the source file of
+# the same name, the first directory listed winning (like VPATH in bin/Makefile)
+# =============================================================================
+if(NOT PATCH STREQUAL "")
+    string(REPLACE ":" ";" _patch_dirs "${PATCH}")
+    set(_patched_files)
+    foreach(_src IN LISTS fortran_files)
+        set(_new "${_src}")
+        if(NOT IS_ABSOLUTE "${_src}")
+            get_filename_component(_name "${_src}" NAME)
+            foreach(_dir IN LISTS _patch_dirs)
+                get_filename_component(_absdir "${_dir}" ABSOLUTE BASE_DIR ${CMAKE_SOURCE_DIR})
+                if(EXISTS "${_absdir}/${_name}")
+                    file(RELATIVE_PATH _new ${CMAKE_SOURCE_DIR} "${_absdir}/${_name}")
+                    message(STATUS "Patch: ${_src} -> ${_new}")
+                    break()
+                endif()
+            endforeach()
+        endif()
+        list(APPEND _patched_files "${_new}")
+    endforeach()
+    set(fortran_files ${_patched_files})
+endif()
+
+# =============================================================================
 # MDL2 (optional, needs mdl2/ sub-tree present)
 # =============================================================================
 if(EXISTS ${CMAKE_SOURCE_DIR}/mdl2)
@@ -732,6 +808,9 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
     set_source_files_properties(gpu/gpu_clump.cuf
         PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o;${_gpu_obj_dir}/gpu_runner.cuf.o")
 
+    set_source_files_properties(gpu/gpu_sink.cuf
+        PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o;${_gpu_obj_dir}/gpu_feedback.cuf.o;${_gpu_obj_dir}/gpu_runner.cuf.o")
+
     set_source_files_properties(gpu/gpu_part.cuf
         PROPERTIES OBJECT_DEPENDS "${_gpu_obj_dir}/gpu_utils.cuf.o;${_gpu_obj_dir}/gpu_runner.cuf.o")
 
@@ -760,6 +839,11 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "NVHPC")
         file(STRINGS "${_full}" _use_part REGEX "[Uu][Ss][Ee][ \t]+part_device([ \t,;]|$)")
         if(_use_part)
             list(APPEND _deps "${_gpu_obj_dir}/gpu_part.cuf.o")
+        endif()
+
+        file(STRINGS "${_full}" _use_sink REGEX "[Uu][Ss][Ee][ \t]+sink_device([ \t,;]|$)")
+        if(_use_sink)
+            list(APPEND _deps "${_gpu_obj_dir}/gpu_sink.cuf.o")
         endif()
 
         file(STRINGS "${_full}" _use_utils REGEX "[Uu][Ss][Ee][ \t]+gpu_utils([ \t,;]|$)")
