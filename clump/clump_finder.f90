@@ -84,6 +84,13 @@ subroutine m_clump_finder(pst,create_output,keep_alive)
         filename=TRIM(filedir)//'peak_tree_header.txt'
         call output_peak_header(r,g,tree,filename)
      endif
+#ifdef CORE
+     if(r%output_peak_core.and.r%core)then
+        write(*,*)'Writing peak core files'
+        filename=TRIM(filedir)//'peak_core_header.txt'
+        call output_peak_header(r,g,pst%s%core,filename)
+     endif
+#endif
      call r_output_clump(pst,input_array,flen/4,dummy,0)
 
      ! In clump_only mode, also write the particles in the order matching the peak files

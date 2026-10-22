@@ -667,7 +667,7 @@ contains
     if(.not.p%static)p%xp(ipart,1:ndim) = p%xp(ipart,1:ndim) + x_acc(1:ndim) / ( p%mp(ipart) + m_acc )
     p%vp(ipart,1:ndim)                  = p%vp(ipart,1:ndim) + p_acc(1:ndim) / ( p%mp(ipart) + m_acc )
     p%jp(ipart,1:ndim)                  = ( p%mp(ipart) * p%jp(ipart,1:ndim) + l_acc(1:ndim) ) / ( p%mp(ipart) + m_acc )
-    if(.not.r%fix_sink_mass)p%mp(ipart) = p%mp(ipart) + m_acc
+    if(.not.r%sink_fix_mass)p%mp(ipart) = p%mp(ipart) + m_acc
 
     ! Save accreted mass to total
     macc_loc = macc_loc + m_acc

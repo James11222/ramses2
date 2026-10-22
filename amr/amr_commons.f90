@@ -394,6 +394,7 @@ module amr_commons
      logical::output_peak_star=.false.
      logical::output_peak_sink=.false.
      logical::output_peak_tree=.false.
+     logical::output_peak_core=.false.
      logical::output_peak_trac=.false.
      logical::output_peak_dust=.false.
      integer::rho_type_clump=1
@@ -466,7 +467,7 @@ module amr_commons
      logical::sink_refine=.false.
      logical::sink_dump=.false.
      logical::static_sink=.false.
-     logical::fix_sink_mass=.false.
+     logical::sink_fix_mass=.false.
      logical::drag_sink=.false.
 
      ! Black hole parameters

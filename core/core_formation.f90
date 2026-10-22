@@ -232,6 +232,36 @@ subroutine core_clump(s)
   !---------------------------------------------
   call particle_peak_id(s,s%core)
   call count_existing_cores_in_peak(s)
+  !----------------------------------------------------------------------
+  ! Compute particle peak and halo ids for the core clump catalogue.
+  !----------------------------------------------------------------------
+  if(s%g%output_done)then
+     if(s%r%tree)then
+        call particle_peak_id(s,s%tree)
+     endif
+     if(s%c%saddle_threshold>0)then
+        if(s%r%part)then
+           call particle_halo_id(s,s%p)
+        endif
+        if(s%r%star)then
+           call particle_halo_id(s,s%star)
+        endif
+        if(s%r%sink)then
+           call particle_halo_id(s,s%sink)
+        endif
+        call particle_halo_id(s,s%core)
+        if(s%r%tree)then
+           call particle_halo_id(s,s%tree)
+        endif
+     else
+        ! Without halo merging, each clump is its own halo
+        if(s%r%part)s%p%hid=s%p%pid
+        if(s%r%star)s%star%hid=s%star%pid
+        if(s%r%sink)s%sink%hid=s%sink%pid
+        s%core%hid=s%core%pid
+        if(s%r%tree)s%tree%hid=s%tree%pid
+     endif
+  endif
 
 #endif
 end subroutine core_clump

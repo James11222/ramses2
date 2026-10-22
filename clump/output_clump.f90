@@ -62,6 +62,13 @@ recursive subroutine r_output_clump(pst,input_array,input_size,output_array,outp
         fileloc=TRIM(filename)//'peak_tree.'
         call output_peak_part(pst%s,pst%s%tree,fileloc)
      endif
+#ifdef CORE
+     ! Write peak id and halo for core particles
+     if(pst%s%r%output_peak_core.and.pst%s%r%core)then
+        fileloc=TRIM(filename)//'peak_core.'
+        call output_peak_part(pst%s,pst%s%core,fileloc)
+     endif
+#endif
   endif
 
 end subroutine r_output_clump

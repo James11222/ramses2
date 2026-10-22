@@ -27,7 +27,8 @@ subroutine output_core_clump_catalogue(pst)
 
   if(.not.g%output_done)return
   if(.not.(r%output_core_clump.or.r%output_peak_grid.or.r%output_peak_part.or. &
-       r%output_peak_star.or.r%output_peak_sink.or.r%output_peak_tree))return
+       r%output_peak_star.or.r%output_peak_sink.or.r%output_peak_tree.or. &
+       r%output_peak_core))return
 
   ! Directory of the output just written
   call title(g%ifout-1,nchar)
@@ -53,6 +54,10 @@ subroutine output_core_clump_catalogue(pst)
   if(r%output_peak_tree.and.r%tree)then
      filename=TRIM(filedir)//'core_peak_tree_header.txt'
      call output_peak_header(r,g,tree,filename)
+  endif
+  if(r%output_peak_core.and.r%core)then
+     filename=TRIM(filedir)//'core_peak_core_header.txt'
+     call output_peak_header(r,g,pst%s%core,filename)
   endif
 
   fileprefix=' '
@@ -114,6 +119,10 @@ recursive subroutine r_output_core_clump(pst,input_array,input_size,output_array
      if(pst%s%r%output_peak_tree.and.pst%s%r%tree)then
         fileloc=TRIM(filename)//'peak_tree.'
         call output_peak_part(pst%s,pst%s%tree,fileloc)
+     endif
+     if(pst%s%r%output_peak_core.and.pst%s%r%core)then
+        fileloc=TRIM(filename)//'peak_core.'
+        call output_peak_part(pst%s,pst%s%core,fileloc)
      endif
   endif
 

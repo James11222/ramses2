@@ -83,7 +83,7 @@ bondi_use_vrel=.false.
 bondi_use_gas_mass=.false.
 static_sink=.true.
 use_bondi_lambda=.false.
-fix_sink_mass=.true.
+sink_fix_mass=.true.
 /
 
 &REFINE_PARAMS

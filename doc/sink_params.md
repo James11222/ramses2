@@ -43,7 +43,7 @@ The three namelist blocks `&SINK_PARAMS`, `&SINK_ACCRETION_PARAMS` and `&SINK_FE
 | `sink_b_spline_order`   | `integer`    | 4             | Order of the B-spline kernel used to gather gas properties around a sink (2 = CIC, 3 = TSC, 4 = PCS).          |
 | `mass_weighting`        | `logical`    | `.true.`      | Weight the per-cell accretion by the local density (rather than by kernel weight only).                        |
 | `momentum_conserving`   | `logical`    | `.false.`     | Transfer the accreted momentum, position offset and angular momentum to the sink.                              |
-| `fix_sink_mass`         | `logical`    | `.false.`     | Freeze the sink mass (still remove accreted mass from the gas).                                                |
+| `sink_fix_mass`         | `logical`    | `.false.`     | Freeze the sink mass (still remove accreted mass from the gas).                                                |
 | `static_sink`           | `logical`    | `.false.`     | Freeze the sink position (velocity and momentum are still updated).                                            |
 | `t_start_black_hole`    | `real`       | -1            | Delay time (code units, since sink birth) before accretion/feedback fully turn on. Ramp-up is exponential.     |
 

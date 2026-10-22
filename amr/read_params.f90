@@ -489,6 +489,7 @@ subroutine m_read_params(pst)
   logical::output_peak_star=.false.
   logical::output_peak_sink=.false.
   logical::output_peak_tree=.false.
+  logical::output_peak_core=.false.
   logical::output_peak_trac=.false.
   logical::output_peak_dust=.false.
   integer::rho_type_clump=1 ! 0: all, 1: DM, 2: stars, 4: gas
@@ -529,7 +530,7 @@ subroutine m_read_params(pst)
   logical::sink_refine=.false.
   logical::sink_dump=.false.
   logical::static_sink=.false.
-  logical::fix_sink_mass=.false.
+  logical::sink_fix_mass=.false.
   logical::drag_sink=.false. ! Whether to use dynamical friction for black hole dynamics
 
   ! Sink accretion parameters
@@ -739,7 +740,7 @@ subroutine m_read_params(pst)
   namelist/sink_accretion_params/accretion_type,acc_sink_boost,bondi_use_vrel,use_rho_inf &
        & ,eddington_cap,sink_b_spline_order,bondi_use_gas_mass,use_bondi_lambda &
        & ,t_start_black_hole,use_local_bondi_rate,static_sink &
-       & ,fix_sink_mass,eddington_floor,mass_weighting,momentum_conserving &
+       & ,sink_fix_mass,eddington_floor,mass_weighting,momentum_conserving &
        & ,manual_accretion_rate
   ! AGN Feedback parameters
   namelist/sink_feedback_params/agn,agn_feedback_radius,agn_weighting_scheme,epsilon_rad &
@@ -750,7 +751,7 @@ subroutine m_read_params(pst)
   ! Clump finder parameters
   namelist/clump_params/clump_finder,clump_info &
        & ,output_clump,output_peak_grid,output_peak_part,output_peak_star,output_peak_sink,output_peak_tree &
-       & ,output_peak_trac,output_peak_dust &
+       & ,output_peak_trac,output_peak_dust,output_peak_core &
        & ,relevance_threshold,density_threshold,saddle_threshold &
        & ,mass_threshold,purity_threshold,fraction_threshold &
        & ,merger_tree,orphan,ntreemax,ntreetot,rho_type_clump,nsteps_per_tree
@@ -1887,6 +1888,7 @@ subroutine m_read_params(pst)
   s%r%output_peak_star=output_peak_star
   s%r%output_peak_sink=output_peak_sink
   s%r%output_peak_tree=output_peak_tree
+  s%r%output_peak_core=output_peak_core
   s%r%output_peak_trac=output_peak_trac
   s%r%output_peak_dust=output_peak_dust
   s%r%relevance_threshold=relevance_threshold
@@ -1921,7 +1923,7 @@ subroutine m_read_params(pst)
   s%r%sink_delta_tout=sink_delta_tout
   s%r%sink_nstar_frac=sink_nstar_frac
   s%r%sink_mseed=sink_mseed
-  s%r%fix_sink_mass=fix_sink_mass
+  s%r%sink_fix_mass=sink_fix_mass
   s%r%drag_sink=drag_sink
 
   s%r%accretion_type = accretion_type
