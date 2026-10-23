@@ -2,10 +2,11 @@
 """Convert a RAMSES output directory output_NNNNN/ to a single HDF5 file.
 
 Usage:
-    ramses2hdf5.py output_00012 [-o output_00012.h5] [--compression gzip|zstd|none]
+    ramses2hdf5.py output_00012 [-o output_00012.h5] [--compression gzip|zstd|none] [--cells]
 
-HDF5 layout (format_version 1). Octs are stored level by level, and within
-a level file by file, so that each file block is a contiguous spatial domain.
+HDF5 layout (format_version 1). By default the grid is stored oct by oct
+(oct layout). Octs are stored level by level, and within a level file by
+file, so that each file block is a contiguous spatial domain.
     /                        attrs: format, format_version and all info.txt entries
     /namelist, /compilation  text copies of namelist.txt and compilation.txt
     /amr/level_offsets       int64 (nlevel+1): oct range of each level
@@ -18,6 +19,18 @@ a level file by file, so that each file block is a contiguous spatial domain.
 Cell ind within an oct runs with x fastest, then y, then z. The center of cell
 ind of an oct at level ilevel is (2*ckey+1+offset(ind))*dx with
 dx = boxlen/2**ilevel and offset = -1/2 or +1/2.
+Refined cells are kept: their values are averages of their children, so sums
+over all cells count refined regions twice. Use the refined bits to keep only
+leaf cells, or ramses_io.leaf_cells().
+
+With --cells, only leaf cells are stored (cell layout), ordered as in the
+oct layout. /amr is replaced by /cells and the grid fields are 1D:
+    /cells/level_offsets     int64 (nlevel+1): cell range of each level
+    /cells/file_offsets      int64 (nlevel, nfile+1): cell range of each file within a level
+    /cells/level             int8 (ncell): cell level
+    /cells/icell             int32 (ncell, ndim): Cartesian index of the cell at its level
+    /<comp>/<var>            float32 (ncell,)
+The center of a cell is (icell+0.5)*dx with dx = boxlen/2**level.
 
 Authors: Romain Teyssier (Princeton University, October 2026)
 """
@@ -25,7 +38,7 @@ import argparse
 import os
 import numpy as np
 import h5py
-from ramses_io import Output
+from ramses_io import Output, cell_index, unpack_refined
 
 format_version = 1
 
@@ -128,6 +141,58 @@ def write_grid(f, o, comp, opts, amr_level_offsets):
             for ivar, name in enumerate(names):
                 grp[name][start:start+n] = block[:,ivar,:]
 
+def write_cells(f, o, opts):
+    """Write the leaf cells (cell layout) of all grid components."""
+    levels = o.levels()
+    # Count leaf cells per level and file
+    nleaf = np.zeros((len(levels),o.nfile),dtype=np.int64)
+    for i, ilevel in enumerate(levels):
+        for ifile, g in enumerate(o.grid["amr"]):
+            _, bits = g.read_amr(ilevel)
+            nleaf[i,ifile] = np.count_nonzero(~unpack_refined(bits,o.ndim))
+    level_offsets = np.zeros(len(levels)+1,dtype=np.int64)
+    file_offsets = np.zeros((len(levels),o.nfile+1),dtype=np.int64)
+    for i in range(len(levels)):
+        file_offsets[i,0] = level_offsets[i]
+        file_offsets[i,1:] = level_offsets[i]+np.cumsum(nleaf[i])
+        level_offsets[i+1] = file_offsets[i,-1]
+    ncell = int(level_offsets[-1])
+    grp = f.create_group("cells")
+    grp.attrs["levelmin"] = o.levelmin
+    grp.attrs["nlevelmax"] = o.nlevelmax
+    grp.create_dataset("level_offsets",data=level_offsets)
+    grp.create_dataset("file_offsets",data=file_offsets)
+    level = create_dataset(grp,"level",(ncell,),np.int8,opts)
+    icell = create_dataset(grp,"icell",(ncell,o.ndim),np.int32,opts)
+    comps = [comp for comp in ["hydro","grav","rt","cr"] if comp in o.grid]
+    for comp in comps:
+        if not np.array_equal(oct_offsets(o,comp)[0],oct_offsets(o,"amr")[0]):
+            raise ValueError("Oct counts in "+comp+" files do not match amr files")
+        grp = f.create_group(comp)
+        for ivar, name in enumerate(o.var_names[comp]):
+            dset = create_dataset(grp,name,(ncell,),np.float32,opts)
+            dset.attrs["index"] = ivar+1
+        if comp=="rt" and o.rt_info is not None:
+            for key, value in o.rt_info.items():
+                grp.attrs[key] = value
+        if comp=="cr" and o.cr_info is not None:
+            for key, value in o.cr_info.items():
+                grp.attrs[key] = value
+    for i, ilevel in enumerate(levels):
+        for ifile, g in enumerate(o.grid["amr"]):
+            n = nleaf[i,ifile]
+            if n==0:
+                continue
+            start = file_offsets[i,ifile]
+            ckey, bits = g.read_amr(ilevel)
+            leaf = ~unpack_refined(bits,o.ndim)
+            level[start:start+n] = ilevel
+            icell[start:start+n] = cell_index(ckey,o.ndim)[leaf]
+            for comp in comps:
+                block = o.grid[comp][ifile].read_level(ilevel)
+                for ivar, name in enumerate(o.var_names[comp]):
+                    f[comp][name][start:start+n] = block[:,ivar,:][leaf]
+
 def write_part(f, o, prefix, opts):
     files = o.part[prefix]
     file_offsets = np.zeros(o.nfile+1,dtype=np.int64)
@@ -146,18 +211,22 @@ def write_part(f, o, prefix, opts):
             data = p.read_field(name)
             dset[start:start+p.npart] = data if ncomp==1 else data.T
 
-def convert(path, h5name, compression="gzip"):
-    """Convert the output directory path into the HDF5 file h5name."""
+def convert(path, h5name, compression="gzip", cells=False):
+    """Convert the output directory path into the HDF5 file h5name,
+    in oct layout, or in cell layout if cells is True."""
     o = Output(path)
     if "amr" not in o.grid:
         raise ValueError("No amr files found in "+path)
     opts = compression_opts(compression)
     with h5py.File(h5name,"w") as f:
         write_attrs(f,o)
-        amr_level_offsets = write_amr(f,o,opts)
-        for comp in ["hydro","grav","rt","cr"]:
-            if comp in o.grid:
-                write_grid(f,o,comp,opts,amr_level_offsets)
+        if cells:
+            write_cells(f,o,opts)
+        else:
+            amr_level_offsets = write_amr(f,o,opts)
+            for comp in ["hydro","grav","rt","cr"]:
+                if comp in o.grid:
+                    write_grid(f,o,comp,opts,amr_level_offsets)
         for prefix in o.part:
             write_part(f,o,prefix,opts)
 
@@ -167,8 +236,10 @@ if __name__=="__main__":
     parser.add_argument("-o", "--out", help="HDF5 file name (default: <path>.h5)")
     parser.add_argument("--compression", default="gzip", choices=["gzip","zstd","none"],
                         help="compression filter (default: gzip)")
+    parser.add_argument("--cells", action="store_true",
+                        help="store only leaf cells (cell layout) instead of octs")
     args = parser.parse_args()
     path = os.path.normpath(args.path)
     h5name = args.out if args.out else path+".h5"
-    convert(path,h5name,args.compression)
+    convert(path,h5name,args.compression,args.cells)
     print("Wrote "+h5name)
