@@ -306,7 +306,8 @@ class IOHandlerRamses(BaseIOHandler):
             data = cache[name]
             data = data if data.ndim==1 else data[icomp]
             if name=="pos":
-                data = data/subset.ds.parameters["boxlen"]
+                # Wrap periodically: float32 positions can round to exactly boxlen
+                data = np.mod(data/subset.ds.parameters["boxlen"],1.0)
             tr[yname] = data
         return tr
 
