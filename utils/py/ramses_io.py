@@ -12,6 +12,53 @@ File layouts (stream access, native endianness):
     <prefix>.NNNNN  int32 ndim, npart, then each field column in header order
                     (prefix = part, star, sink, tree, trac, dust, core)
 
+Examples:
+    import numpy as np
+    import ramses_io
+
+    # Text files: info.txt as a dict, variable names, particle fields
+    info = ramses_io.rd_info_txt("output_00011/info.txt")
+    print(info["time"], info["boxlen"], info["unit_l"])
+    names = ramses_io.rd_var_names("output_00011/hydro_header.txt")
+    fields = ramses_io.rd_part_fields("output_00011/part_header.txt")
+
+    # Output: parse all headers, nothing is read yet
+    o = ramses_io.Output("output_00011")
+    print(o.ndim, o.nfile, o.levels())
+    print(o.var_names)                  # {"hydro": ["density", ...], "grav": [...]}
+    print(o.noct_per_level())           # {levelmin: noct, ...}
+    print(o.npart("part"))              # total number of dark matter particles
+
+    # GridFile: octs and cell values of one level of one file
+    ilevel = o.levelmin+2
+    ckey, bits = o.grid["amr"][0].read_amr(ilevel)
+    refined = ramses_io.unpack_refined(bits,o.ndim)         # (noct, 2**ndim) bool
+    icell = ramses_io.cell_index(ckey,o.ndim)               # (noct, 2**ndim, ndim)
+    x = (icell+0.5)*o.info["boxlen"]/2**ilevel              # cell centers
+    hydro = o.grid["hydro"][0].read_level(ilevel)           # (noct, nvar, 2**ndim)
+    rho = hydro[:,o.var_names["hydro"].index("density"),:]  # (noct, 2**ndim)
+    rho_leaf = rho[~refined]
+
+    # PartFile: one field of every file of a particle type
+    pos = np.concatenate([p.read_field("pos") for p in o.part["part"]],axis=1)
+    mass = np.concatenate([p.read_field("mass") for p in o.part["part"]])
+
+    # leaf_cells: all fields of all leaf cells, from the output directory
+    c = ramses_io.leaf_cells("output_00011")
+    print(c.ncell, c.names)
+    vol = c.dx**c.ndim
+    mass_gas = (c["density"]*vol).sum()
+
+    # leaf_cells: a few fields in a sub-box, from an HDF5 file of ramses2hdf5.py
+    c = ramses_io.leaf_cells("output_00011.h5",fields=["density","grav/potential"],
+                             box=[[0,0,0],[0.5,0.5,0.5]])
+    x, y, z = c.x
+
+    # leaf_cells: the finest levels only, then a density-weighted histogram
+    c = ramses_io.leaf_cells("output_00011",fields=["density"],levels=range(10,13))
+    hist, edges = np.histogram(np.log10(c["density"]),bins=50,
+                               weights=c["density"]*c.dx**c.ndim)
+
 Authors: Romain Teyssier (Princeton University, October 2026)
 """
 import numpy as np
