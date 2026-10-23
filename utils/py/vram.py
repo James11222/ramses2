@@ -19,8 +19,8 @@ import argparse
 def vram(ngridmax, npartmax, ncachemax, nvar=None, amr=False, clump=False, halo=True, tree=False, npre=4):
     """
     This function estimates the GPU memory (VRAM) usage for RAMSES II simulations
-    based on the number of grids, particles, cache, precision, number of hydro variables, 
-    usage of AMR, usage of the clump finder, and usage of merger trees. 
+    based on the number of grids, particles, cache, precision, number of hydro variables,
+    usage of AMR, usage of the clump finder, and usage of merger trees.
 
     Args:
         ngridmax  : Maximum number of grids
