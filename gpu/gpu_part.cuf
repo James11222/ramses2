@@ -18,13 +18,11 @@ module part_device
        & tree_xp, tree_vp, tree_mp, tree_tp, tree_tm, &
        & tree_levelp, tree_sortp, tree_idp, tree_idm, tree_idt, &
        & xp_swap, isp_swap, idp_swap, &
-       & gpu_scan, gpu_scan_dp, d_skip
+       & gpu_scan, gpu_scan_dp, d_skip, &
+       & noct_src, nref_from_rho
   use gpu_runner, only: core_xp, core_vp, core_fp, core_jp, core_mp, core_zp, &
        & core_tp, core_up, core_levelp, core_nacc, core_sortp, core_idp, &
        & prefix_sum_phys
-#if defined(CUB_SORT_PART)
-  use gpu_runner, only: hkeyp
-#endif
   implicit none
 
   ! Local hash/hilbert/reduce includes.
@@ -1352,6 +1350,158 @@ attributes(global) subroutine write_sortp_part(sortp_d, swap_global_d, &
   sortp_d(idx) = swap_global_d(idx)
 end subroutine write_sortp_part
 
+!> One word of the Hilbert sort key of the particles listed in perm_d.
+!>
+!> Same source cell and key as compute_hkey_part_kernel, for particle
+!> perm_d(head_idx+i-1): bits lobit..lobit+nbit-1 of its key go to key_d(i).
+!> With nbit <= 31 the words are non-negative and sort as unsigned integers.
+attributes(global) subroutine compute_hkey_word_part_kernel(xp, perm_d, key_d, &
+     & box_ckey_min_d, box_ckey_max_d, skip, dx_inv, head_idx, num_parts, &
+     & leading, level, shift, lobit, nbit)
+  implicit none
+  real(kind=dp),   device :: xp(*)
+  integer(kind=4), device :: perm_d(*)
+  integer(kind=4), device :: key_d(*)
+  integer(kind=4), device :: box_ckey_min_d(1:3, *)
+  integer(kind=4), device :: box_ckey_max_d(1:3, *)
+  real(kind=8), intent(in), device :: skip(*)
+  real(kind=8), intent(in), value :: dx_inv
+  integer(kind=4), intent(in), value :: head_idx
+  integer(kind=4), intent(in), value :: num_parts
+  integer(kind=8), intent(in), value :: leading
+  integer(kind=4), intent(in), value :: level
+  real(kind=8),    intent(in), value :: shift
+  integer(kind=4), intent(in), value :: lobit, nbit
+
+  integer :: thread_idx, block_idx, idx, ipart, idim
+  integer(kind=4) :: ix(1:ndim), box_min(1:3), box_max(1:3)
+  real(kind=8) :: xs
+
+  thread_idx = threadIdx%x - 1
+  block_idx = blockIdx%x  - 1
+
+  idx = thread_idx + block_idx * blockDim%x
+  if (idx >= num_parts) return
+  ipart = perm_d(head_idx + idx)
+
+  box_min = 0
+  box_max = 0
+  do idim = 1, ndim
+     box_min(idim) = box_ckey_min_d(idim, level+1)
+     box_max(idim) = box_ckey_max_d(idim, level+1)
+  end do
+
+  do idim = 1, ndim
+     xs = (xp(ipart + (idim-1)*leading) + skip(idim)) * dx_inv + shift
+     ix(idim) = floor(xs)
+     ! Match host CIC periodic BCs: wrap within the actual computational box.
+     if (ix(idim) <  box_min(idim)) ix(idim) = box_max(idim) - 1
+     if (ix(idim) >= box_max(idim)) ix(idim) = box_min(idim)
+  end do
+
+  key_d(idx + 1) = int(ibits(hilbert_key(ix, level), lobit, nbit), kind=4)
+
+end subroutine compute_hkey_word_part_kernel
+
+!> Hilbert sort of particles head_idx..head_idx+num_parts-1 of one species.
+!>
+!> On return sortp_d(head_idx:) lists them by increasing Hilbert key of the
+!> given level (see compute_hkey_part_kernel), equal keys by increasing index:
+!> the order of a stable sort by the full key from the identity sequence.
+!>
+!> The key is sorted 31 bits at a time, lowest word first, by stable CUB radix
+!> sorts on 32-bit keys that ping-pong between two key buffers and two index
+!> buffers (isp_swap and sortp_d). The key buffers are the scratch arrays
+!> xp_swap and prefix_sum, idle here, so the sort allocates nothing per particle
+!> (64-bit keys took two buffers of 8 bytes plus 12 bytes of CUB work space).
+subroutine gpu_hilbert_sort(xp_d, leading, sortp_d, head_idx, num_parts, level, dx_inv, shift)
+  use iso_c_binding
+  use cub_module, only: radix_sort_inplace32
+  use refine_device, only: init_global_swap_table_kernel_u8
+  implicit none
+  real(kind=dp),   device :: xp_d(*)
+  integer(kind=8), intent(in) :: leading
+  integer(kind=4), device, target :: sortp_d(*)
+  integer(kind=4), intent(in) :: head_idx, num_parts
+  integer, intent(in) :: level
+  real(kind=8), intent(in) :: dx_inv, shift
+
+  integer, parameter :: nrnd = 16, nthr = 128, wbits = 31
+  integer(kind=4), pointer, device, dimension(:) :: key_a, key_b
+  integer(kind=4) :: nbits, lobit, nbit, sel
+  integer :: num_threads, num_blocks, nblks
+  logical :: in_sortp
+
+  num_threads = 128
+  num_blocks = (num_parts + num_threads - 1) / num_threads
+
+  ! Two buffers of num_parts 32-bit keys in scratch memory: xp_swap alone holds
+  ! both in double precision, xp_swap and prefix_sum hold one each otherwise.
+  if (dp == 8) then
+     call c_f_pointer(c_loc(xp_swap(1)), key_a, [2_8 * size(xp_swap, kind=8)])
+     call c_f_pointer(c_loc(key_a(num_parts + 1)), key_b, [num_parts])
+  else
+     call c_f_pointer(c_loc(xp_swap(1)), key_a, [num_parts])
+     call c_f_pointer(c_loc(prefix_sum(1)), key_b, [num_parts])
+  endif
+
+  ! Input sequence [head_idx ... head_idx + num_parts - 1] in isp_swap
+  nblks = (((num_parts + nrnd - 1)/nrnd) + nthr - 1)/nthr
+  call init_global_swap_table_kernel_u8<<<nblks,nthr>>>(isp_swap, head_idx, num_parts)
+  call GPU_Error_Check(__FILE__, __LINE__)
+  in_sortp = .false.
+
+  ! One stable sort per key word, lowest first. The current order is in
+  ! isp_swap or in sortp_d (in_sortp); CUB returns which of the two it sorted to.
+  nbits = ndim * level
+  lobit = 0
+  do while (lobit < nbits)
+     nbit = min(wbits, nbits - lobit)
+     if (in_sortp) then
+        call compute_hkey_word_part_kernel<<<num_blocks, num_threads>>>(xp_d, sortp_d, key_a, &
+             & box_ckey_min, box_ckey_max, d_skip, dx_inv, head_idx, num_parts, &
+             & leading, level, shift, lobit, nbit)
+        call GPU_Error_Check(__FILE__, __LINE__)
+        sel = radix_sort_inplace32(c_loc(key_a(1)), c_loc(key_b(1)), &
+             & c_loc(sortp_d(head_idx)), c_loc(isp_swap(head_idx)), num_parts, 0, nbit)
+        if (sel == 1) in_sortp = .false.
+     else
+        call compute_hkey_word_part_kernel<<<num_blocks, num_threads>>>(xp_d, isp_swap, key_a, &
+             & box_ckey_min, box_ckey_max, d_skip, dx_inv, head_idx, num_parts, &
+             & leading, level, shift, lobit, nbit)
+        call GPU_Error_Check(__FILE__, __LINE__)
+        sel = radix_sort_inplace32(c_loc(key_a(1)), c_loc(key_b(1)), &
+             & c_loc(isp_swap(head_idx)), c_loc(sortp_d(head_idx)), num_parts, 0, nbit)
+        if (sel == 1) in_sortp = .true.
+     endif
+     lobit = lobit + nbit
+  end do
+
+  ! Sorted indices to sortp
+  if (.not. in_sortp) then
+     call write_sortp_part<<<num_blocks, num_threads>>>(sortp_d, isp_swap, head_idx, num_parts)
+     call GPU_Error_Check(__FILE__, __LINE__)
+  endif
+
+end subroutine gpu_hilbert_sort
+
+!> Refinement threshold handed to the mass deposit kernels, which deposit in
+!> nref when it is not negative. When cells are flagged from rho, nref is not
+!> allocated and the threshold is negative.
+real(kind=8) function nref_gate(sim, ilevel)
+  use ramses_commons, only: ramses_t
+  implicit none
+  type(ramses_t), intent(in) :: sim
+  integer, intent(in) :: ilevel
+
+  if (nref_from_rho) then
+     nref_gate = -1d0
+  else
+     nref_gate = sim%r%m_refine(ilevel)
+  endif
+
+end function nref_gate
+
 !> GPU sort_part.
 subroutine gpu_sort_part(sim, ilevel)
   use nvtx
@@ -1395,6 +1545,21 @@ subroutine gpu_sort_part(sim, ilevel)
   end if
 
   call nvtxStartRange("gpu_sort_part", color=4) ! purple
+#if defined(CUB_SORT_PART)
+  ! Only the small-stencil deposit reads the Hilbert keys back from idp_swap
+  if (sim%r%part_dep_algo == 3) then
+     call nvtxStartRange("gpu_sort_part:hkey", color=4)
+     call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(xp, idp_swap, &
+          & box_ckey_min, box_ckey_max, d_skip, dx_inv, head_idx, num_parts, &
+          & int(sim%r%npartmax,8), level, shift)
+     call GPU_Error_Check(__FILE__, __LINE__)
+     call nvtxEndRange()
+  endif
+
+  ! Sorted indices in sortp, from 32-bit radix sorts in idle scratch buffers
+  call gpu_hilbert_sort(xp, int(sim%r%npartmax,8), sortp, head_idx, num_parts, &
+       & level, dx_inv, shift)
+#else
   ! Compute Hilbert keys and store them in idp_swap
   call nvtxStartRange("gpu_sort_part:hkey", color=4)
   call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(xp, idp_swap, &
@@ -1403,19 +1568,6 @@ subroutine gpu_sort_part(sim, ilevel)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
-#if defined(CUB_SORT_PART)
-  ! generate the input sequence [head_idx ... head_idx + num_parts - 1]
-  nblks = (((num_parts + nrnd - 1)/nrnd) + nthr - 1)/nthr
-  call init_global_swap_table_kernel_u8<<<nblks,nthr>>>(isp_swap, head_idx, num_parts)
-  call GPU_Error_Check(__FILE__, __LINE__)
-
-  ! idp_swap has keys to sort by. isp_swap is the input indices sequence
-  ! sortp has the sorted indices. hkeyp will have the sorted keys. we don't
-  ! need sorted keys but cub requires no overlap on input and output buffers.
-  call radix_sort(c_loc(idp_swap(head_idx)), c_loc(hkeyp(head_idx)), &
-                & c_loc(isp_swap(head_idx)), c_loc(sortp(head_idx)), &
-                & head_idx, num_parts, 0, ndim * level)
-#else
   ! Init sortp
   call nvtxStartRange("gpu_sort_part:init_sortp", color=4)
   call init_global_swap_table_kernel<<<num_blocks, num_threads>>>(sortp, &
@@ -1496,6 +1648,21 @@ subroutine gpu_sort_star(sim, ilevel)
   end if
 
   call nvtxStartRange("gpu_sort_star", color=4) ! purple
+#if defined(CUB_SORT_PART)
+  ! Only the small-stencil deposit reads the Hilbert keys back from idp_swap
+  if (sim%r%star_dep_algo == 3) then
+     call nvtxStartRange("gpu_sort_star:hkey", color=4)
+     call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(star_xp, idp_swap, &
+          & box_ckey_min, box_ckey_max, d_skip, dx_inv, head_idx, num_parts, &
+          & int(sim%r%nstarmax,8), level, shift)
+     call GPU_Error_Check(__FILE__, __LINE__)
+     call nvtxEndRange()
+  endif
+
+  ! Sorted indices in star_sortp, from 32-bit radix sorts in idle scratch buffers
+  call gpu_hilbert_sort(star_xp, int(sim%r%nstarmax,8), star_sortp, head_idx, num_parts, &
+       & level, dx_inv, shift)
+#else
   ! Compute Hilbert keys and store them in idp_swap
   call nvtxStartRange("gpu_sort_star:hkey", color=4)
   call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(star_xp, idp_swap, &
@@ -1504,19 +1671,6 @@ subroutine gpu_sort_star(sim, ilevel)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
-#if defined(CUB_SORT_PART)
-  ! generate the input sequence [head_idx ... head_idx + num_parts - 1]
-  nblks = (((num_parts + nrnd - 1)/nrnd) + nthr - 1)/nthr
-  call init_global_swap_table_kernel_u8<<<nblks,nthr>>>(isp_swap, head_idx, num_parts)
-  call GPU_Error_Check(__FILE__, __LINE__)
-
-  ! idp_swap has keys to sort by. isp_swap is the input indices sequence
-  ! sortp has the sorted indices. hkeyp will have the sorted keys. we don't
-  ! need sorted keys but cub requires no overlap on input and output buffers.
-  call radix_sort(c_loc(idp_swap(head_idx)), c_loc(hkeyp(head_idx)), &
-                & c_loc(isp_swap(head_idx)), c_loc(star_sortp(head_idx)), &
-                & head_idx, num_parts, 0, ndim * level)
-#else
   ! Init sortp
   call nvtxStartRange("gpu_sort_star:init_sortp", color=4)
   call init_global_swap_table_kernel<<<num_blocks, num_threads>>>(star_sortp, &
@@ -1597,6 +1751,21 @@ subroutine gpu_sort_sink(sim, ilevel)
   end if
 
   call nvtxStartRange("gpu_sort_sink", color=4) ! purple
+#if defined(CUB_SORT_PART)
+  ! Only the small-stencil deposit reads the Hilbert keys back from idp_swap
+  if (sim%r%sink_dep_algo == 3) then
+     call nvtxStartRange("gpu_sort_sink:hkey", color=4)
+     call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(sink_xp, idp_swap, &
+          & box_ckey_min, box_ckey_max, d_skip, dx_inv, head_idx, num_parts, &
+          & int(sim%r%nsinkmax,8), level, shift)
+     call GPU_Error_Check(__FILE__, __LINE__)
+     call nvtxEndRange()
+  endif
+
+  ! Sorted indices in sink_sortp, from 32-bit radix sorts in idle scratch buffers
+  call gpu_hilbert_sort(sink_xp, int(sim%r%nsinkmax,8), sink_sortp, head_idx, num_parts, &
+       & level, dx_inv, shift)
+#else
   ! Compute Hilbert keys and store them in idp_swap
   call nvtxStartRange("gpu_sort_sink:hkey", color=4)
   call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(sink_xp, idp_swap, &
@@ -1605,19 +1774,6 @@ subroutine gpu_sort_sink(sim, ilevel)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
-#if defined(CUB_SORT_PART)
-  ! generate the input sequence [head_idx ... head_idx + num_parts - 1]
-  nblks = (((num_parts + nrnd - 1)/nrnd) + nthr - 1)/nthr
-  call init_global_swap_table_kernel_u8<<<nblks,nthr>>>(isp_swap, head_idx, num_parts)
-  call GPU_Error_Check(__FILE__, __LINE__)
-
-  ! idp_swap has keys to sort by. isp_swap is the input indices sequence
-  ! sortp has the sorted indices. hkeyp will have the sorted keys. we don't
-  ! need sorted keys but cub requires no overlap on input and output buffers.
-  call radix_sort(c_loc(idp_swap(head_idx)), c_loc(hkeyp(head_idx)), &
-                & c_loc(isp_swap(head_idx)), c_loc(sink_sortp(head_idx)), &
-                & head_idx, num_parts, 0, ndim * level)
-#else
   ! Init sortp
   call nvtxStartRange("gpu_sort_sink:init_sortp", color=4)
   call init_global_swap_table_kernel<<<num_blocks, num_threads>>>(sink_sortp, &
@@ -1691,6 +1847,11 @@ subroutine gpu_sort_core(sim, ilevel)
   shift = 0.0_dp
 
   call nvtxStartRange("gpu_sort_core", color=4) ! purple
+#if defined(CUB_SORT_PART)
+  ! Sorted indices in core_sortp, from 32-bit radix sorts in idle scratch buffers
+  call gpu_hilbert_sort(core_xp, int(sim%r%ncoremax,8), core_sortp, head_idx, num_parts, &
+       & level, dx_inv, shift)
+#else
   ! Compute Hilbert keys and store them in idp_swap
   call nvtxStartRange("gpu_sort_core:hkey", color=4)
   call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(core_xp, idp_swap, &
@@ -1699,19 +1860,6 @@ subroutine gpu_sort_core(sim, ilevel)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
-#if defined(CUB_SORT_PART)
-  ! generate the input sequence [head_idx ... head_idx + num_parts - 1]
-  nblks = (((num_parts + nrnd - 1)/nrnd) + nthr - 1)/nthr
-  call init_global_swap_table_kernel_u8<<<nblks,nthr>>>(isp_swap, head_idx, num_parts)
-  call GPU_Error_Check(__FILE__, __LINE__)
-
-  ! idp_swap has keys to sort by. isp_swap is the input indices sequence
-  ! sortp has the sorted indices. hkeyp will have the sorted keys. we don't
-  ! need sorted keys but cub requires no overlap on input and output buffers.
-  call radix_sort(c_loc(idp_swap(head_idx)), c_loc(hkeyp(head_idx)), &
-                & c_loc(isp_swap(head_idx)), c_loc(core_sortp(head_idx)), &
-                & head_idx, num_parts, 0, ndim * level)
-#else
   ! Init sortp
   call nvtxStartRange("gpu_sort_core:init_sortp", color=4)
   call init_global_swap_table_kernel<<<num_blocks, num_threads>>>(core_sortp, &
@@ -1784,6 +1932,11 @@ subroutine gpu_sort_tree(sim, ilevel)
   shift = 0.0_dp
 
   call nvtxStartRange("gpu_sort_tree", color=4) ! purple
+#if defined(CUB_SORT_PART)
+  ! Sorted indices in tree_sortp, from 32-bit radix sorts in idle scratch buffers
+  call gpu_hilbert_sort(tree_xp, int(sim%r%ntreemax,8), tree_sortp, head_idx, num_parts, &
+       & level, dx_inv, shift)
+#else
   ! Compute Hilbert keys and store them in idp_swap
   call nvtxStartRange("gpu_sort_tree:hkey", color=4)
   call compute_hkey_part_kernel<<<num_blocks, num_threads>>>(tree_xp, idp_swap, &
@@ -1792,19 +1945,6 @@ subroutine gpu_sort_tree(sim, ilevel)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
-#if defined(CUB_SORT_PART)
-  ! generate the input sequence [head_idx ... head_idx + num_parts - 1]
-  nblks = (((num_parts + nrnd - 1)/nrnd) + nthr - 1)/nthr
-  call init_global_swap_table_kernel_u8<<<nblks,nthr>>>(isp_swap, head_idx, num_parts)
-  call GPU_Error_Check(__FILE__, __LINE__)
-
-  ! idp_swap has keys to sort by. isp_swap is the input indices sequence
-  ! sortp has the sorted indices. hkeyp will have the sorted keys. we don't
-  ! need sorted keys but cub requires no overlap on input and output buffers.
-  call radix_sort(c_loc(idp_swap(head_idx)), c_loc(hkeyp(head_idx)), &
-                & c_loc(isp_swap(head_idx)), c_loc(tree_sortp(head_idx)), &
-                & head_idx, num_parts, 0, ndim * level)
-#else
   ! Init sortp
   call nvtxStartRange("gpu_sort_tree:init_sortp", color=4)
   call init_global_swap_table_kernel<<<num_blocks, num_threads>>>(tree_sortp, &
@@ -1956,9 +2096,10 @@ attributes(global) subroutine cic_part_large_kernel(sortp_d, &
      & box_ckey_min_d, box_ckey_max_d, periodic_d, &
      & xp_d, mp_d, rho_d, nref_d, &
      & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, star, &
-     & m_refine_at_level, mass_cut_refine, ilevel, leading)
+     & m_refine_at_level, mass_cut_refine, ilevel, leading, noct_dep)
   logical, intent(in), value :: star
   integer(kind=4), intent(in), value :: head_idx, num_parts, ilevel
+  integer(kind=4), intent(in), value :: noct_dep
   integer(kind=8), intent(in), value :: leading
   integer(kind=4), device :: sortp_d(*)
   integer(kind=8), device :: hash_key_d(*)
@@ -2222,6 +2363,8 @@ attributes(global) subroutine cic_part_large_kernel(sortp_d, &
            ! hash_get returns 0 if the destination oct is not present on this
            ! rank, which again suppresses the atomic for this segment.
            dst_igrid_lane = hash_get(hash_key_d, hash_val_d, hash_size_d, key)
+           ! Ghost octs above noct_dep have no rho and nref: nothing is deposited there.
+           if (dst_igrid_lane > noct_dep) dst_igrid_lane = 0
         endif
      endif
 
@@ -2378,7 +2521,7 @@ subroutine gpu_cic_part_large(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, periodic, &
        & xp, mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, 1d0, .false., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%npartmax,8))
+       & nref_gate(sim, ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%npartmax,8), noct_src)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -2455,7 +2598,7 @@ subroutine gpu_cic_star_large(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, periodic, &
        & star_xp, star_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nstarmax,8))
+       & nref_gate(sim, ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nstarmax,8), noct_src)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -2532,7 +2675,7 @@ subroutine gpu_cic_sink_large(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, periodic, &
        & sink_xp, sink_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nsinkmax,8))
+       & nref_gate(sim, ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nsinkmax,8), noct_src)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -2598,7 +2741,7 @@ subroutine gpu_cic_core_large(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, periodic, &
        & core_xp, core_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%ncoremax,8))
+       & nref_gate(sim, ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%ncoremax,8), noct_src)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -2631,9 +2774,10 @@ attributes(global) subroutine cic_part_medium_kernel(sortp_d, &
      & box_ckey_min_d, box_ckey_max_d, &
      & xp_d, mp_d, rho_d, nref_d, &
      & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, star, &
-     & m_refine_at_level, mass_cut_refine, ilevel, leading)
+     & m_refine_at_level, mass_cut_refine, ilevel, leading, noct_dep)
   logical, intent(in), value :: star
   integer(kind=4), intent(in), value :: head_idx, num_parts, ilevel
+  integer(kind=4), intent(in), value :: noct_dep
   integer(kind=8), intent(in), value :: leading
   integer(kind=4), device :: sortp_d(*)
   integer(kind=8), device :: hash_key_d(*)
@@ -2825,6 +2969,8 @@ attributes(global) subroutine cic_part_medium_kernel(sortp_d, &
         iz8 = int(father_ckey(3), kind=8)
         key = hkey_offset + ix8 + iy8*nx + iz8*nx*nx
         dst_igrid_lane = hash_get(hash_key_d, hash_val_d, hash_size_d, key)
+        ! Ghost octs above noct_dep have no rho and nref: nothing is deposited there.
+        if (dst_igrid_lane > noct_dep) dst_igrid_lane = 0
      endif
 
      ! Segmented inclusive Hillis-Steele scan along the warp (identical).
@@ -2921,7 +3067,7 @@ subroutine gpu_cic_part_medium(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, &
        & xp, mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, 1d0, .false., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%npartmax,8))
+       & nref_gate(sim, ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%npartmax,8), noct_src)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -2985,7 +3131,7 @@ subroutine gpu_cic_star_medium(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, &
        & star_xp, star_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nstarmax,8))
+       & nref_gate(sim, ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nstarmax,8), noct_src)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -3049,7 +3195,7 @@ subroutine gpu_cic_sink_medium(sim, ilevel, rtype)
        & box_ckey_min, box_ckey_max, &
        & sink_xp, sink_mp, rho, nref, &
        & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, .true., &
-       & sim%r%m_refine(ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nsinkmax,8))
+       & nref_gate(sim, ilevel), sim%r%mass_cut_refine, ilevel, int(sim%r%nsinkmax,8), noct_src)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -3199,7 +3345,7 @@ attributes(global) subroutine deposit_runs_part_small(sortp_d, xp_d, contrib_d, 
      & prefix_sum_d, run_tail_d, &
      & hash_key_d, hash_val_d, hash_size_d, ckey_max_d, key_off_d, &
      & box_ckey_min_d, box_ckey_max_d, out_d, &
-     & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, leading)
+     & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, leading, noct_dep)
   integer(kind=4), device :: sortp_d(*)
   real(kind=dp),   device :: xp_d(*)
   real(kind=dp),   device :: contrib_d(*)
@@ -3216,6 +3362,7 @@ attributes(global) subroutine deposit_runs_part_small(sortp_d, xp_d, contrib_d, 
   real(kind=8), intent(in), value :: skip1, skip2, skip3, dx_inv
   integer(kind=4), intent(in), value :: k, ilevel, head_idx, num_parts
   integer(kind=8), intent(in), value :: leading
+  integer(kind=4), intent(in), value :: noct_dep
 
   integer :: thread_idx, block_idx, idx, g, ipart, idim, bit, kk, rid
   integer :: tail_slot, g_t, igrid, icell
@@ -3276,7 +3423,8 @@ attributes(global) subroutine deposit_runs_part_small(sortp_d, xp_d, contrib_d, 
      if (target_ckey(idim) >= box_max(idim)) target_ckey(idim) = box_min(idim)
   end do
 
-  ! Hash the target cell's parent oct; skip if it is not present on this rank.
+  ! Hash the target cell's parent oct; skip if it is not present on this rank,
+  ! or if it is a ghost oct above noct_dep, which has no rho and nref.
   nx          = int(ckey_max_d(ilevel), kind=8)
   hkey_offset = key_off_d(ilevel)
   father_ckey = target_ckey / 2
@@ -3290,7 +3438,7 @@ attributes(global) subroutine deposit_runs_part_small(sortp_d, xp_d, contrib_d, 
   iz8 = int(father_ckey(3), kind=8)
   key = hkey_offset + ix8 + iy8*nx + iz8*nx*nx
   igrid = hash_get(hash_key_d, hash_val_d, hash_size_d, key)
-  if (igrid == 0) return
+  if (igrid == 0 .or. igrid > noct_dep) return
 
   ! Race free: distinct runs (source cells) map to distinct target cells here.
   out_d(icell, igrid) = out_d(icell, igrid) + real(run_sum, kind=dp)
@@ -3384,11 +3532,11 @@ subroutine gpu_cic_part_small(sim, ilevel, rtype)
           & prefix_sum, isp_swap, &
           & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
           & box_ckey_min, box_ckey_max, rho, &
-          & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%npartmax,8))
+          & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%npartmax,8), noct_src)
      call GPU_Error_Check(__FILE__, __LINE__)
 
      ! nref contribution (w, gated), only when the refinement gate is active.
-     if (sim%r%m_refine(ilevel) >= 0.0_dp) then
+     if (nref_gate(sim, ilevel) >= 0.0d0) then
         call fill_contrib_part_small<<<blk, nblk>>>(sortp, xp, mp, xp_swap, &
              & skip1, skip2, skip3, dx_inv, vol_loc, k, 1, sim%r%mass_cut_refine, 1d0, &
              & head_idx, num_parts, int(sim%r%npartmax,8))
@@ -3398,7 +3546,7 @@ subroutine gpu_cic_part_small(sim, ilevel, rtype)
              & prefix_sum, isp_swap, &
              & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
              & box_ckey_min, box_ckey_max, nref, &
-             & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%npartmax,8))
+             & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%npartmax,8), noct_src)
         call GPU_Error_Check(__FILE__, __LINE__)
      endif
   end do
@@ -3483,11 +3631,11 @@ subroutine gpu_cic_star_small(sim, ilevel, rtype)
           & prefix_sum, isp_swap, &
           & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
           & box_ckey_min, box_ckey_max, rho, &
-          & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nstarmax,8))
+          & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nstarmax,8), noct_src)
      call GPU_Error_Check(__FILE__, __LINE__)
 
      ! nref contribution (w, gated), only when the refinement gate is active.
-     if (sim%r%m_refine(ilevel) >= 0.0_dp) then
+     if (nref_gate(sim, ilevel) >= 0.0d0) then
         call fill_contrib_part_small<<<blk, nblk>>>(star_sortp, star_xp, star_mp, xp_swap, &
              & skip1, skip2, skip3, dx_inv, vol_loc, k, 2, sim%r%mass_cut_refine, mass_sph,&
              & head_idx, num_parts, int(sim%r%nstarmax,8))
@@ -3497,7 +3645,7 @@ subroutine gpu_cic_star_small(sim, ilevel, rtype)
              & prefix_sum, isp_swap, &
              & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
              & box_ckey_min, box_ckey_max, nref, &
-             & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nstarmax,8))
+             & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nstarmax,8), noct_src)
         call GPU_Error_Check(__FILE__, __LINE__)
      endif
   end do
@@ -3582,11 +3730,11 @@ subroutine gpu_cic_sink_small(sim, ilevel, rtype)
           & prefix_sum, isp_swap, &
           & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
           & box_ckey_min, box_ckey_max, rho, &
-          & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nsinkmax,8))
+          & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nsinkmax,8), noct_src)
      call GPU_Error_Check(__FILE__, __LINE__)
 
      ! nref contribution (w, gated), only when the refinement gate is active.
-     if (sim%r%m_refine(ilevel) >= 0.0_dp) then
+     if (nref_gate(sim, ilevel) >= 0.0d0) then
         call fill_contrib_part_small<<<blk, nblk>>>(sink_sortp, sink_xp, sink_mp, xp_swap, &
              & skip1, skip2, skip3, dx_inv, vol_loc, k, 2, sim%r%mass_cut_refine, mass_sph,&
              & head_idx, num_parts, int(sim%r%nsinkmax,8))
@@ -3596,7 +3744,7 @@ subroutine gpu_cic_sink_small(sim, ilevel, rtype)
              & prefix_sum, isp_swap, &
              & hash_key, hash_val, sim%m%hash_size, ckey_max, key_off, &
              & box_ckey_min, box_ckey_max, nref, &
-             & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nsinkmax,8))
+             & skip1, skip2, skip3, dx_inv, k, ilevel, head_idx, num_parts, int(sim%r%nsinkmax,8), noct_src)
         call GPU_Error_Check(__FILE__, __LINE__)
      endif
   end do
@@ -3624,9 +3772,10 @@ attributes(global) subroutine bspline_part_kernel(sortp_d, &
      & box_ckey_min_d, box_ckey_max_d, periodic_d, &
      & xp_d, mp_d, rho_d, nref_d, &
      & skip1, skip2, skip3, dx_loc, vol_loc, mass_sph, star, &
-     & m_refine_at_level, mass_cut_refine, order, ilevel, leading)
+     & m_refine_at_level, mass_cut_refine, order, ilevel, leading, noct_dep)
   logical, intent(in), value :: star
   integer(kind=4), intent(in), value :: head_idx, num_parts, order, ilevel
+  integer(kind=4), intent(in), value :: noct_dep
   integer(kind=8), intent(in), value :: leading
   integer(kind=4), device :: sortp_d(*)
   integer(kind=8), device :: hash_key_d(*)
@@ -3671,7 +3820,8 @@ attributes(global) subroutine bspline_part_kernel(sortp_d, &
      call sink_bspline_device(order, x, j, box_ckey_min_d, box_ckey_max_d, periodic_d, &
           & ilevel, ckey, xnei, w)
 
-     ! Parent oct of the target cell; skip the cell if the oct is absent.
+     ! Parent oct of the target cell; skip the cell if the oct is absent, or if
+     ! it is a ghost oct above noct_dep, which has no rho and nref.
      father_ckey = ckey / 2
      ii = ckey - 2 * father_ckey
      icell = 1
@@ -3683,7 +3833,7 @@ attributes(global) subroutine bspline_part_kernel(sortp_d, &
      iz8 = int(father_ckey(3), kind=8)
      key = hkey_offset + ix8 + iy8*nx + iz8*nx*nx
      igrid = hash_get(hash_key_d, hash_val_d, hash_size_d, key)
-     if (igrid == 0) cycle
+     if (igrid == 0 .or. igrid > noct_dep) cycle
 
      info = atomicadd(rho_d(icell, igrid), mp_i * w / vol_loc)
      if (m_refine_at_level >= 0.0_dp) then
@@ -3769,8 +3919,8 @@ subroutine gpu_bspline_part(sim, ilevel, rtype, order)
        & xp, mp, rho, nref, &
        & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), 1.0_dp, .false., &
-       & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
-       & order, ilevel, int(sim%r%npartmax,8))
+       & real(nref_gate(sim, ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
+       & order, ilevel, int(sim%r%npartmax,8), noct_src)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -3835,8 +3985,8 @@ subroutine gpu_bspline_star(sim, ilevel, rtype, order)
        & star_xp, star_mp, rho, nref, &
        & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), real(sim%r%mass_sph,kind=dp), .true., &
-       & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
-       & order, ilevel, int(sim%r%nstarmax,8))
+       & real(nref_gate(sim, ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
+       & order, ilevel, int(sim%r%nstarmax,8), noct_src)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -3901,8 +4051,8 @@ subroutine gpu_bspline_sink(sim, ilevel, rtype, order)
        & sink_xp, sink_mp, rho, nref, &
        & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), real(sim%r%mass_sph,kind=dp), .true., &
-       & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
-       & order, ilevel, int(sim%r%nsinkmax,8))
+       & real(nref_gate(sim, ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
+       & order, ilevel, int(sim%r%nsinkmax,8), noct_src)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 
@@ -3967,8 +4117,8 @@ subroutine gpu_bspline_core(sim, ilevel, rtype, order)
        & core_xp, core_mp, rho, nref, &
        & real(sim%m%skip(1),kind=dp), real(sim%m%skip(2),kind=dp), real(sim%m%skip(3),kind=dp), &
        & real(dx_loc,kind=dp), real(vol_loc,kind=dp), real(sim%r%mass_sph,kind=dp), .true., &
-       & real(sim%r%m_refine(ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
-       & order, ilevel, int(sim%r%ncoremax,8))
+       & real(nref_gate(sim, ilevel),kind=dp), real(sim%r%mass_cut_refine,kind=dp), &
+       & order, ilevel, int(sim%r%ncoremax,8), noct_src)
   call GPU_Error_Check(__FILE__, __LINE__)
   call nvtxEndRange()
 

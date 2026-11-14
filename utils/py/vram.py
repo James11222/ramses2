@@ -4,7 +4,7 @@
 Usage:
     vram.py --ngridmax 2^27 [--npartmax 2^27] [--ncachemax 1e4] [--nvar 5]
             [--grav] [--mhd] [--amr] [--clump [--no-halo] [--tree]]
-            [--npre 4|8] [--nsubgrid 1]
+            [--npre 4|8] [--nsubgrid 1] [--no-lean] [--multimass] [--dep-algo 2]
 
 Counts accept integers, floats (1.4e8) or powers (512^3, 2**27; quote the
 latter in zsh, e.g. '2**27').
@@ -15,6 +15,12 @@ GRAV=1 builds with the Poisson solver on. --mhd counts ideal MHD only
 (the split non-ideal MHD solver allocates more). Stars, sinks, turbulence,
 cooling tables and LONGINT particle ids are not counted.
 
+Pure N-body runs (--grav without --nvar, --mhd and --clump) use the lean mesh
+of gpu_lean=.true.: rho, phi_old, the refinement flags and the oct swap tables
+stop at ngridmax, and so does the multigrid mesh. Pass --no-lean for
+gpu_lean=.false. With particles of a single mass and no mass_cut_refine, nref
+is not allocated either; pass --multimass otherwise.
+
 Examples:
     vram.py --ngridmax 1.4e8 --ncachemax 6e7 --npartmax 1024^3 --grav --amr
     vram.py --ngridmax 2^27 --npartmax 2^27 --grav --clump --npre 8
@@ -23,7 +29,7 @@ Examples:
 import argparse
 
 def vram(ngridmax, npartmax, ncachemax, nvar=None, grav=False, mhd=False, amr=False, clump=False,
-         halo=True, tree=False, npre=4, nsubgrid=1):
+         halo=True, tree=False, npre=4, nsubgrid=1, lean=True, multimass=False, dep_algo=2):
     """
     This function estimates the GPU memory (VRAM) usage for RAMSES II simulations
     based on the number of grids, particles, cache, precision, number of hydro variables,
@@ -46,6 +52,13 @@ def vram(ngridmax, npartmax, ncachemax, nvar=None, grav=False, mhd=False, amr=Fa
                     (merger_tree=.true., only with clump=True, ntreemax = npartmax/100)
         npre      : Precision (4 for single, 8 for double)
         nsubgrid  : NSUBGRID compile flag (octs per neighbour block edge)
+        lean      : gpu_lean namelist parameter. It only acts in pure N-body runs
+                    (grav, no hydro, no MHD, no clump finder): the ghost octs of the
+                    cache then have no rho, nref, phi_old and flags
+        multimass : Particles of several masses, or mass_cut_refine set: nref is
+                    kept in lean runs (it is always kept otherwise)
+        dep_algo  : Largest *_dep_algo of the particle species: the small-stencil
+                    deposit (3) keeps 8 more bytes per particle (idp_swap)
 
     Returns:
         Estimated VRAM usage in GiB (2^30 bytes) assuming 1 GPU [GiB]
@@ -66,19 +79,30 @@ def vram(ngridmax, npartmax, ncachemax, nvar=None, grav=False, mhd=False, amr=Fa
     Ns = max(Np, Nt)       # particle swap/sort buffers are sized for the largest species
     Nscan = max(N, Np, Nt) # prefix_sum: largest oct or particle scan (no more 8 cells/oct)
 
-    Nsort = max(Ns, N) if amr else Ns  # CUB radix sort workspace is shared with the refine oct sort
 
-    V = (96*N          # grid 64, hash 24, swap 8
+    # Lean mesh (gpu_lean): pure N-body runs keep rho, nref, phi_old, flag1, flag2,
+    # the oct swap tables and the multigrid mesh out of the ghost octs of the cache
+    lean = lean and grav and nvar is None and not mhd and not clump
+    Nsrc = G if lean else N
+    Mmg = G/7 if lean else M
+
+    V = (56*N          # grid 32, hash 24
+        + 8*Nsrc           # swap_local, swap_global
         + 4*(nsubgrid + 2)**3*G/nsubgrid**3  # nbor
         + 4*Nscan          # prefix_sum
         + (7*P + 8)*Np     # xp, vp, mp, levelp, sortp
-        + (P + 20)*Ns      # xp_swap, isp_swap, idp_swap, hkeyp
-        + 12*Nsort         # CUB radix sort workspace (int64 keys + int32 values)
+        + (P + 4)*Ns       # xp_swap, isp_swap (the particle sort keeps its keys in xp_swap and prefix_sum)
         )
+    if dep_algo == 3:
+        V += 8*Ns          # idp_swap: Hilbert keys of the small-stencil deposit
 
     if grav:
-        V += 56*P*N  # rho, phi, nref, phi_old, f
-        V += (92 + 32*P)*M + 4*G + 108*G/7  # multigrid mesh: grid, hash, phi/f, father, nbor
+        V += 32*P*N        # phi, f
+        V += 16*P*Nsrc     # rho, phi_old
+        if not lean or multimass:
+            V += 8*P*Nsrc  # nref
+        V += (56 + 32*P)*Mmg  # multigrid mesh: grid, hash, phi, f
+        V += 4*(G + M) + 108*G/7  # multigrid mesh: father, nbor
     if mhd:
         V += 96*P*N  # bold + bnew (8 cells x 6 faces each, two copies)
 
@@ -86,7 +110,7 @@ def vram(ngridmax, npartmax, ncachemax, nvar=None, grav=False, mhd=False, amr=Fa
         V += 16 * nvar * P * N # uold + unew (8 cells × nvar each, two copies)
                                # nvar = 5 + NENER + NPSCAL + NMETAL + NION
     if amr:
-        V += 68 * N + 4 * Np  # flag1/flag2, father, idp (nlevelmax > levelmin)
+        V += 64 * Nsrc + 4 * N + 4 * Np  # flag1/flag2, father, idp (nlevelmax > levelmin)
     elif clump:
         V += 64 * N  # flag1/flag2 are also allocated in unigrid runs with the clump finder
 
@@ -143,13 +167,20 @@ if __name__=="__main__":
                         help="float precision in bytes, NPRE (default: 4)")
     parser.add_argument("--nsubgrid", type=int, default=1,
                         help="NSUBGRID compile flag (default: 1)")
+    parser.add_argument("--no-lean", dest="lean", action="store_false",
+                        help="gpu_lean=.false.: pure N-body runs also keep rho, nref, phi_old and flags in ghost octs")
+    parser.add_argument("--multimass", action="store_true",
+                        help="particles of several masses or mass_cut_refine set: lean runs keep nref")
+    parser.add_argument("--dep-algo", type=int, default=2, choices=[1,2,3],
+                        help="largest *_dep_algo of the particle species (default: 2)")
     args = parser.parse_args()
     if (args.tree or not args.halo) and not args.clump:
         parser.error("--tree and --no-halo require --clump")
 
     v = vram(args.ngridmax, args.npartmax, args.ncachemax, nvar=args.nvar,
              grav=args.grav, mhd=args.mhd, amr=args.amr, clump=args.clump,
-             halo=args.halo, tree=args.tree, npre=args.npre, nsubgrid=args.nsubgrid)
+             halo=args.halo, tree=args.tree, npre=args.npre, nsubgrid=args.nsubgrid,
+             lean=args.lean, multimass=args.multimass, dep_algo=args.dep_algo)
     print("ngridmax  = {:d}".format(args.ngridmax))
     print("npartmax  = {:d}".format(args.npartmax))
     print("ncachemax = {:d}".format(args.ncachemax))
@@ -160,6 +191,11 @@ if __name__=="__main__":
     print("mhd       = {}".format(args.mhd))
     print("amr       = {}".format(args.amr))
     print("clump     = {}".format(args.clump))
+    lean = args.lean and args.grav and args.nvar is None and not args.mhd and not args.clump
+    print("lean      = {}".format(lean))
+    if lean:
+        print("multimass = {}".format(args.multimass))
+    print("dep_algo  = {:d}".format(args.dep_algo))
     if args.clump:
         print("halo      = {}".format(args.halo))
         print("tree      = {}".format(args.tree))

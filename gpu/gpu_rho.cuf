@@ -52,11 +52,12 @@ contains
   ! ==========================================================================
 
   ! =========================================================================
-  attributes(global) subroutine reset_rho(rho, nref, head_idx, num_octs)
+  attributes(global) subroutine reset_rho(rho, nref, head_idx, num_octs, with_nref)
     real(kind=dp), device :: rho(1:twotondim,*)
     real(kind=dp), device :: nref(1:twotondim,*)
     integer(kind=4), intent(in), value :: head_idx
     integer(kind=4), intent(in), value :: num_octs
+    logical, intent(in), value :: with_nref
 
     integer :: cell_idx, oct_idx, block_idx
 
@@ -71,7 +72,8 @@ contains
     cell_idx = threadIdx%x
 
     rho (cell_idx, oct_idx) = 0
-    nref(cell_idx, oct_idx) = 0
+    ! nref is not allocated when cells are flagged from rho
+    if (with_nref) nref(cell_idx, oct_idx) = 0
 
   end subroutine reset_rho
   ! =========================================================================~

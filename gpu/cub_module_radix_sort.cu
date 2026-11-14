@@ -70,6 +70,71 @@ void cub_module_radix_sort_allocate_workspace(int32_t num_elem)
   }
 }
 
+/// grow the retained work space to at least work_size bytes
+static void cub_module_radix_sort_reserve(size_t work_size)
+{
+  if (g_cub_module_radix_sort_work_size < work_size)
+  {
+    if (g_cub_module_radix_sort_workspace)
+    {
+      cudaFree(g_cub_module_radix_sort_workspace);
+      g_cub_module_radix_sort_workspace = nullptr;
+      g_cub_module_radix_sort_work_size = 0;
+    }
+    CUDA_CHECK(cudaMalloc(&g_cub_module_radix_sort_workspace, work_size))
+    g_cub_module_radix_sort_work_size = work_size;
+    if (0 < g_cub_module_radix_sort_verbose)
+      std::cerr << "allocated " << work_size << " bytes on the device" << std::endl;
+  }
+}
+
+/// sort pairs in place over two key buffers and two value buffers.
+/// CUB ping-pongs between the buffers of each pair, so it needs no third
+/// buffer of num_elem keys and values in the work space (only histograms).
+/// Both buffers of each pair are overwritten.
+/// @returns 0 if the sorted values are in vals, 1 if they are in vals_alt
+template<typename KeyT>
+static int32_t radix_sort_inplace(KeyT *keys, KeyT *keys_alt,
+                                  int32_t *vals, int32_t *vals_alt,
+                                  int32_t num_elem,
+                                  int32_t start_bit, int32_t end_bit)
+{
+  CHECK_ALIGN(keys)
+  CHECK_ALIGN(keys_alt)
+  CHECK_ALIGN(vals)
+  CHECK_ALIGN(vals_alt)
+
+  cub::DoubleBuffer<KeyT> d_keys(keys, keys_alt);
+  cub::DoubleBuffer<int32_t> d_vals(vals, vals_alt);
+
+  size_t work_size = 0;
+  CUDA_CHECK(cub::DeviceRadixSort::SortPairs(nullptr, work_size, d_keys, d_vals,
+                                             num_elem, start_bit, end_bit))
+  cub_module_radix_sort_reserve(work_size);
+
+  CUDA_CHECK(cub::DeviceRadixSort::SortPairs(g_cub_module_radix_sort_workspace,
+                                             work_size, d_keys, d_vals,
+                                             num_elem, start_bit, end_bit))
+
+  return d_vals.Current() == vals ? 0 : 1;
+}
+
+int32_t cub_module_radix_sort_inplace(int64_t *keys, int64_t *keys_alt,
+                                      int32_t *vals, int32_t *vals_alt,
+                                      int32_t num_elem,
+                                      int32_t start_bit, int32_t end_bit)
+{
+  return radix_sort_inplace(keys, keys_alt, vals, vals_alt, num_elem, start_bit, end_bit);
+}
+
+int32_t cub_module_radix_sort_inplace32(uint32_t *keys, uint32_t *keys_alt,
+                                        int32_t *vals, int32_t *vals_alt,
+                                        int32_t num_elem,
+                                        int32_t start_bit, int32_t end_bit)
+{
+  return radix_sort_inplace(keys, keys_alt, vals, vals_alt, num_elem, start_bit, end_bit);
+}
+
 /// input an array of keys to sort
 void cub_module_radix_sort(int64_t *keys_in, int64_t *keys_out,
                            int32_t *idx_in, int32_t *idx_out,

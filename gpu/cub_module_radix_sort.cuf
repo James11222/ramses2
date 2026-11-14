@@ -22,6 +22,36 @@ module cub_module
       integer(c_int32_t), value :: head_idx, num_elem, start_bit, end_bit
     end subroutine
 
+    !> sorts pairs in place, ping-ponging between two key buffers and two value
+    !> buffers: the work space holds no copy of the keys and values, but both
+    !> buffers of each pair are overwritten.
+    !> @param[in,out] keys keys to sort
+    !> @param[in,out] keys_alt second key buffer of the same length
+    !> @param[in,out] vals values carried with the keys
+    !> @param[in,out] vals_alt second value buffer of the same length
+    !> @param[in] num_elem number of elements to sort
+    !> @param[in] start_bit first bit to apply radix sort to
+    !> @param[in] end_bit last bit to apply radix sort to (exclusive)
+    !> @returns 0 if the sorted values are in vals, 1 if they are in vals_alt
+    integer(c_int32_t) function radix_sort_inplace(keys, keys_alt, vals, vals_alt, &
+                          num_elem, start_bit, end_bit) bind(c, name="cub_module_radix_sort_inplace")
+      use cudafor
+      use iso_c_binding
+      implicit none
+      type(c_ptr), value :: keys, keys_alt, vals, vals_alt
+      integer(c_int32_t), value :: num_elem, start_bit, end_bit
+    end function
+
+    !> same as radix_sort_inplace for 32 bit keys.
+    integer(c_int32_t) function radix_sort_inplace32(keys, keys_alt, vals, vals_alt, &
+                          num_elem, start_bit, end_bit) bind(c, name="cub_module_radix_sort_inplace32")
+      use cudafor
+      use iso_c_binding
+      implicit none
+      type(c_ptr), value :: keys, keys_alt, vals, vals_alt
+      integer(c_int32_t), value :: num_elem, start_bit, end_bit
+    end function
+
     !> pre-allocate work space for scan. note that the scan itself will always
     !> check and allocate if needed so calling this is optional.
     subroutine radix_sort_allocate_workspace(num_octs) bind(c, name="cub_module_radix_sort_allocate_workspace")

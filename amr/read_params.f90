@@ -102,6 +102,7 @@ subroutine m_read_params(pst)
   integer::nlevelmax=1        ! Maximum number of level
   integer::ngridmax=0         ! Maximum number of grids
   integer::ncachemax=10000    ! Maximum number of cache lines
+  logical::gpu_lean=.true.    ! GPU pure N-body runs: no rho, nref, phi_old and flags in ghost octs
   real(kind=8)::boxlen=1.0D0      ! Cell sixe at level 0
 
   ! Output parameters
@@ -620,7 +621,7 @@ subroutine m_read_params(pst)
   namelist/traj_params/ntrajectories,trajectories
   ! AMR grid basic parameters
   namelist/amr_params/levelmin,levelmax,ngridmax,ncachemax,ngridtot &
-       & ,npartmax,nparttot,nexpand,boxlen
+       & ,npartmax,nparttot,nexpand,boxlen,gpu_lean
   ! Poisson solver parameters
   namelist/poisson_params/epsilon,nvcycle,mg_safe_mode_reset,gravity_type,gravity_params &
        & ,cg_levelmin,cic_levelmax,fast_solver,gravity_test &
@@ -1644,6 +1645,7 @@ subroutine m_read_params(pst)
   s%r%nlevelmax=nlevelmax
   s%r%ngridmax=ngridmax
   s%r%ncachemax=ncachemax
+  s%r%gpu_lean=gpu_lean
   s%r%npartmax=npartmax
   s%r%nstarmax=nstarmax
   s%r%nsinkmax=nsinkmax

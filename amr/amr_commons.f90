@@ -71,6 +71,7 @@ module amr_commons
      integer::nlevelmax=1        ! Maximum number of level
      integer::ngridmax=0         ! Maximum number of grids
      integer::ncachemax=10000    ! Maximum number of cache lines
+     logical::gpu_lean=.true.    ! GPU pure N-body runs: no rho, nref, phi_old and flags in ghost octs
      integer::npartmax=0         ! Maximum number of DM particles
      integer::nstarmax=0         ! Maximum number of star particles
      integer::nsinkmax=0         ! Maximum number of sink particles

@@ -2040,7 +2040,7 @@ end subroutine nimhd_ghost_b_kernel
   attributes(grid_global) subroutine make_cache_insert_ghost_octs(grid, flag1, &
        & uold, bold, f, phi, phi_old, swap_local, prefix_sum, father, nbor, hash_key, &
        & hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, &
-       & periodic, ngridmax, ncachemax, ifree_cache, cache_overflow, input_ind, head_idx, &
+       & periodic, ngridmax, ncachemax, noct_src, ifree_cache, cache_overflow, input_ind, head_idx, &
        & num_subgrids, interpol_var, interpol_type, smallr)
 
     use cooperative_groups
@@ -2066,7 +2066,7 @@ end subroutine nimhd_ghost_b_kernel
     logical, device :: periodic(1:3)
     integer(kind=4), device :: ifree_cache, cache_overflow
     integer(kind=4), intent(in), value :: hash_size
-    integer(kind=4), intent(in), value :: ngridmax, ncachemax
+    integer(kind=4), intent(in), value :: ngridmax, ncachemax, noct_src
     integer(kind=4), intent(in), value :: input_ind
     integer(kind=4), intent(in), value :: head_idx
     integer(kind=4), intent(in), value :: num_subgrids
@@ -2087,7 +2087,7 @@ end subroutine nimhd_ghost_b_kernel
     ! Make new ghost octs in cache
     call make_cache_octs_impl(grid, flag1, uold, bold, f, phi, phi_old, swap_local, father, nbor, &
         & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-        & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
+        & ngridmax, ncachemax, noct_src, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
     call syncthreads(gg)
 
     ! Insert new octs in hash table
@@ -2106,7 +2106,7 @@ end subroutine nimhd_ghost_b_kernel
   ! =========================================================================
   attributes(global) subroutine make_cache_octs(grid, flag1, uold, bold, f, phi, phi_old, swap_local, father, nbor, &
        & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-       & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
+       & ngridmax, ncachemax, noct_src, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
     type(oct), device :: grid(*)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
     real(kind=dp), device :: phi(1:twotondim,*)
@@ -2126,21 +2126,21 @@ end subroutine nimhd_ghost_b_kernel
     logical, device :: periodic(1:3)
     integer(kind=4), device :: ifree_cache, cache_overflow, num_octs
     integer(kind=4), intent(in), value :: hash_size
-    integer(kind=4), intent(in), value :: ngridmax, ncachemax
+    integer(kind=4), intent(in), value :: ngridmax, ncachemax, noct_src
     integer(kind=4), intent(in), value :: input_ind
     integer(kind=4), intent(in), value :: interpol_var, interpol_type
     real(kind=dp), intent(in), value :: smallr
 
     call make_cache_octs_impl(grid, flag1, uold, bold, f, phi, phi_old, swap_local, father, nbor, &
         & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-        & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
+        & ngridmax, ncachemax, noct_src, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
 
   end subroutine make_cache_octs
 
   ! =========================================================================
   attributes(device) subroutine make_cache_octs_impl(grid, flag1, uold, bold, f, phi, phi_old, swap_local, father, nbor, &
        & hash_key, hash_val, hash_size, ckey_max, key_off, box_ckey_min, box_ckey_max, periodic, &
-       & ngridmax, ncachemax, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
+       & ngridmax, ncachemax, noct_src, ifree_cache, cache_overflow, num_octs, input_ind, interpol_var, interpol_type, smallr)
     type(oct), device :: grid(*)
     real(kind=dp), device :: f(1:twotondim,1:ndim,*)
     real(kind=dp), device :: phi(1:twotondim,*)
@@ -2160,7 +2160,7 @@ end subroutine nimhd_ghost_b_kernel
     logical, device :: periodic(1:3)
     integer(kind=4), device :: ifree_cache, cache_overflow, num_octs
     integer(kind=4), intent(in), value :: hash_size
-    integer(kind=4), intent(in), value :: ngridmax, ncachemax
+    integer(kind=4), intent(in), value :: ngridmax, ncachemax, noct_src
     integer(kind=4), intent(in), value :: input_ind
     integer(kind=4), intent(in), value :: interpol_var, interpol_type
     real(kind=dp), intent(in), value :: smallr
@@ -2233,7 +2233,8 @@ end subroutine nimhd_ghost_b_kernel
        grid(cache_idx)%ckey(idim) = ckey(idim)
     end do
     grid(cache_idx)%refined(1:twotondim) = .false.
-    flag1(1:twotondim, cache_idx) = 0
+    ! flag1 and phi_old stop at noct_src: ghost octs above it have neither
+    if (cache_idx <= noct_src) flag1(1:twotondim, cache_idx) = 0
 
     ! Compute new oct Hilbert key
     hkey = hilbert_key(ckey, ilevel - 1)
@@ -2304,7 +2305,7 @@ end subroutine nimhd_ghost_b_kernel
        f(ind,2,cache_idx) = f(cell_idx,2,parent_idx)
        f(ind,3,cache_idx) = f(cell_idx,3,parent_idx)
        phi(ind,cache_idx) = phi(cell_idx,parent_idx)
-       phi_old(ind,cache_idx) = phi_old(cell_idx,parent_idx)
+       if (cache_idx <= noct_src) phi_old(ind,cache_idx) = phi_old(cell_idx,parent_idx)
     end do
 #endif
 
